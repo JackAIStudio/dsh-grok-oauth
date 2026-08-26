@@ -1,0 +1,68 @@
+{
+  "name": "dsh-grok-oauth",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Independent, locally-owned Grok (xAI) provider for DeepSeek Harness: xAI subscription OAuth (PKCE) login, chat, usage, and optional Grok Imagine. A stable fork of the upstream dsh-llm-grok approach with a cross-platform browser opener. Not tied to the upstream GitHub repo, so upstream updates cannot overwrite local fixes.",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "LICENSE",
+    "README.zh.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ],
+      "platform": "web"
+    }
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@earendil-works/pi-ai": "^0.82.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-api-remotes": ">=0.1.0-rc.6 <0.1.1 || >=0.1.1-rc.1 <1.0.0",
+    "@deepseek-ai/dsh-attachment": ">=0.1.0-rc.6 <0.1.1 || >=0.1.1-rc.1 <1.0.0",
+    "@deepseek-ai/dsh-client-connection": ">=0.1.0-rc.6 <0.1.1 || >=0.1.1-rc.1 <1.0.0",
+    "@deepseek-ai/dsh-client-locale": ">=0.1.0-rc.6 <0.1.1 || >=0.1.1-rc.1 <1.0.0",
+    "@deepseek-ai/dsh-client-runtime": ">=0.1.0-rc.6 <0.1.1 || >=0.1.1-rc.1 <1.0.0",
+    "@deepseek-ai/dsh-client-ui-layout": ">=0.1.0-rc.6 <0.1.1 || >=0.1.1-rc.1 <1.0.0",
+    "@deepseek-ai/dsh-client-ui-settings": ">=0.1.0-rc.6 <0.1.1 || >=0.1.1-rc.1 <1.0.0",
+    "@deepseek-ai/dsh-client-ui-settings-plugins": ">=0.1.0-rc.6 <0.1.1 || >=0.1.1-rc.1 <1.0.0",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.0-rc.6 <0.1.1 || >=0.1.1-rc.1 <1.0.0",
+    "@deepseek-ai/dsh-fs": ">=0.1.0-rc.6 <0.1.1 || >=0.1.1-rc.1 <1.0.0",
+    "@deepseek-ai/dsh-invariants": ">=0.1.0-rc.6 <0.1.1 || >=0.1.1-rc.1 <1.0.0",
+    "@deepseek-ai/dsh-launch-environment": ">=0.1.0-rc.6 <0.1.1 || >=0.1.1-rc.1 <1.0.0",
+    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.6 <0.1.1 || >=0.1.1-rc.1 <1.0.0",
+    "@deepseek-ai/dsh-llm-pi-ai": ">=0.1.0-rc.6 <0.1.1 || >=0.1.1-rc.1 <1.0.0",
+    "@deepseek-ai/dsh-settings": ">=0.1.0-rc.6 <0.1.1 || >=0.1.1-rc.1 <1.0.0",
+    "@deepseek-ai/dsh-timeout": ">=0.1.0-rc.6 <0.1.1 || >=0.1.1-rc.1 <1.0.0",
+    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.6 <0.1.1 || >=0.1.1-rc.1 <1.0.0",
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  }
+}

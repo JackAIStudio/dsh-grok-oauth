@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Local runtime / logs
+*.log
+.DS_Store
+*.pid
+
+# Environment / secrets — never commit real credentials
+.env
+.env.*
+!.env.example
+*accessToken*
+*refreshToken*
+grok-oauth.json
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Local install artifacts
+*.tgz
+*.zip
