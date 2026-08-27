@@ -1616,8 +1616,19 @@ function createGrokPiAiProfile(connection) {
 		/**
 		* Mirrors RC1's official 20 MiB default and satisfies its required profile
 		* field; RC8 hosts ignore this extra property at runtime.
+		*
+		* The per-image request policy is REQUIRED alongside the aggregate bound.
+		* dsh-llm-pi-ai passes `{maxPixels: profile.requestImagePixelBudget,
+		* maxBytes: profile.requestImageMaxBytes}` straight into its offload math;
+		* omitting either makes the per-image byte length `Math.min(bytes,
+		* undefined)` = NaN, which defeats the `excessBytes === 0` guard and
+		* replaces EVERY retained image with the "image omitted" placeholder —
+		* even a 149-byte PNG under the 20 MiB aggregate budget. Values mirror
+		* the documented pi-ai defaults (2048x2048 total pixels, 1 MiB raw).
 		*/
 		maxRequestImageBytes: 20971520,
+		requestImagePixelBudget: 2048 * 2048,
+		requestImageMaxBytes: 1048576,
 		piProvider,
 		configuredMaxTokens,
 		headers
