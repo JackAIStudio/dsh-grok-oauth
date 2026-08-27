@@ -38,6 +38,16 @@ dsh plugin --profile web add github:JackAIStudio/dsh-grok-oauth
 
 然后重启 `dsh web`。
 
+开发机用 `link:` 时，还要在插件目录补上 host 侧 peer（否则 `dsh web` 会因找不到 `@deepseek-ai/schemastery` 起不来）：
+
+```bash
+cd "$HOME/Documents/dshspace/plugins/dsh-grok-oauth"
+npm install --omit=dev --ignore-scripts   # 装 undici 等自身依赖
+./scripts/link-host-peers.sh             # 把 ~/.dsh/profiles 里的 DSH peer 链回来
+```
+
+`node_modules/` 已 gitignore，不要提交。`npm install` 会清掉 peer 软链，装完后重新跑一次 `link-host-peers.sh`。
+
 ## 目录结构
 
 - `index.js` —— host 侧:GroK 供应商适配器 + OAuth/PKCE 登录 + RPC + 用量 + 图片生成。
