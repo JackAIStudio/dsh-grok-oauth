@@ -11,6 +11,7 @@ import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promi
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { launchEnvironmentOf } from "@deepseek-ai/dsh-launch-environment";
+import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import { createAssistantMessageEventStream, createProvider } from "@earendil-works/pi-ai";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { AttachmentId } from "@deepseek-ai/dsh-attachment";
@@ -107,10 +108,16 @@ function decodeGrokSettings(value) {
 	if (typeof streamIdleTimeoutMs !== "number" || !Number.isFinite(streamIdleTimeoutMs) || streamIdleTimeoutMs <= 0) return;
 	const modelsValue = value["models"];
 	const enableImageGen = value["enableImageGen"] === true;
+	const serverSearch = value["serverSearch"];
+	if (serverSearch !== void 0 && typeof serverSearch !== "boolean") return void 0;
+	const proxy = value["proxy"];
+	if (proxy !== void 0 && typeof proxy !== "string") return void 0;
 	if (modelsValue === void 0) return {
 		streamIdleTimeoutMs,
 		models: GROK_CATALOG.map((model) => ({ ...model })),
-		enableImageGen
+		enableImageGen,
+		...typeof serverSearch === "boolean" ? { serverSearch } : {},
+		...typeof proxy === "string" ? { proxy } : {}
 	};
 	if (!Array.isArray(modelsValue)) return void 0;
 	const models = [];
@@ -122,7 +129,9 @@ function decodeGrokSettings(value) {
 	return {
 		streamIdleTimeoutMs,
 		models,
-		enableImageGen
+		enableImageGen,
+		...typeof serverSearch === "boolean" ? { serverSearch } : {},
+		...typeof proxy === "string" ? { proxy } : {}
 	};
 }
 /**
@@ -306,6 +315,10 @@ function decodeGrokSaveRequest(value) {
 	const expectedRevision = value["expectedRevision"];
 	if (!Array.isArray(value["models"]) || typeof expectedRevision !== "number" || !Number.isSafeInteger(expectedRevision)) return;
 	if (value["enableImageGen"] !== void 0 && typeof value["enableImageGen"] !== "boolean") return void 0;
+	const serverSearch = value["serverSearch"];
+	if (serverSearch !== void 0 && typeof serverSearch !== "boolean") return void 0;
+	const proxy = value["proxy"];
+	if (proxy !== void 0 && typeof proxy !== "string") return void 0;
 	const models = [];
 	for (const entry of value["models"]) {
 		const model = decodeGrokCatalogModel(entry);
@@ -315,7 +328,9 @@ function decodeGrokSaveRequest(value) {
 	return {
 		models,
 		expectedRevision,
-		...typeof value["enableImageGen"] === "boolean" ? { enableImageGen: value["enableImageGen"] } : {}
+		...typeof value["enableImageGen"] === "boolean" ? { enableImageGen: value["enableImageGen"] } : {},
+		...typeof serverSearch === "boolean" ? { serverSearch } : {},
+		...typeof proxy === "string" ? { proxy } : {}
 	};
 }
 /**
@@ -716,6 +731,145 @@ function createGrokAuthRuntime(overrides) {
 		...overrides
 	};
 }
+/** Proxy setting spellings that force a direct connection. */
+const PROXY_DIRECT_VALUE = /^(?:direct|off|none)$/iu;
+/**
+* Resolve the plugin `proxy` setting into a transport decision.
+* Empty means "inherit the environment"; `direct`/`off`/`none` forces a
+* direct connection; anything else is treated as an HTTP(S) proxy URL
+* (`host:port` is normalized to `http://host:port`).
+* @param value - raw setting value.
+* @returns auto | direct | explicit | invalid.
+*/
+function resolveProxySetting(value) {
+	if (typeof value !== "string" || value.trim().length === 0) return { mode: "auto" };
+	const trimmed = value.trim();
+	if (PROXY_DIRECT_VALUE.test(trimmed)) return { mode: "direct" };
+	const url = /^[a-z][a-z0-9+.-]*:\/\//iu.test(trimmed) ? trimmed : `http://${trimmed}`;
+	try {
+		const parsed = new URL(url);
+		if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return { mode: "invalid", value: trimmed };
+		return { mode: "explicit", url: parsed.toString() };
+	} catch {
+		return { mode: "invalid", value: trimmed };
+	}
+}
+/** Standard proxy environment variables, most-specific first. */
+function proxyEnvValue() {
+	return process.env.HTTPS_PROXY ?? process.env.https_proxy ?? process.env.ALL_PROXY ?? process.env.all_proxy ?? void 0;
+}
+/** Log-safe proxy label: credentials are stripped before any output. */
+function proxyLabel(value) {
+	if (typeof value !== "string" || value.length === 0) return "environment proxy";
+	try {
+		const parsed = new URL(/^[a-z][a-z0-9+.-]*:\/\//iu.test(value) ? value : `http://${value}`);
+		parsed.username = "";
+		parsed.password = "";
+		return parsed.toString();
+	} catch {
+		return "proxy";
+	}
+}
+/**
+* Build the Host fetch implementation for the current proxy setting.
+*
+* `direct`/`off`/`none`, or no proxy anywhere, keeps Node's global fetch
+* (unchanged behavior). With a proxy, requests run through an undici
+* agent: an explicit setting first, otherwise HTTPS_PROXY / ALL_PROXY
+* from the environment (NO_PROXY is honored by EnvHttpProxyAgent).
+* @param setting - the plugin `proxy` setting value.
+* @param logger - optional Host logger for warnings/notes.
+*/
+function createGrokFetch(setting, logger) {
+	const resolved = resolveProxySetting(setting);
+	if (resolved.mode === "direct") return globalThis.fetch;
+	if (resolved.mode === "invalid") {
+		logger?.warn?.(`llm-grok: ignoring invalid proxy setting "${resolved.value}"; falling back to the environment proxy`);
+	}
+	if (resolved.mode === "explicit" && resolved.url !== void 0) {
+		const agent = new ProxyAgent(resolved.url);
+		logger?.debug?.(`llm-grok: routing Grok requests through ${proxyLabel(resolved.url)}`);
+		return (input, init) => undiciFetch(input, { ...init, dispatcher: agent });
+	}
+	const envProxy = proxyEnvValue();
+	if (envProxy === void 0) return globalThis.fetch;
+	const agent = new EnvHttpProxyAgent();
+	logger?.debug?.(`llm-grok: routing Grok requests through ${proxyLabel(envProxy)}`);
+	return (input, init) => undiciFetch(input, { ...init, dispatcher: agent });
+}
+/** True when the configured transport actually routes through a proxy. */
+function hasActiveProxy(setting) {
+	const resolved = resolveProxySetting(setting);
+	if (resolved.mode === "direct") return false;
+	if (resolved.mode === "explicit") return true;
+	return proxyEnvValue() !== void 0;
+}
+/**
+* Loopback and NO_PROXY hosts must never hit the proxy: the Host talks to
+* its own local services over 127.0.0.1, and users may exclude domains.
+* @param input - fetch RequestInfo.
+*/
+function shouldBypassProxy(input) {
+	let url;
+	try {
+		url = typeof input === "string" ? new URL(input) : new URL(input.url);
+	} catch {
+		return true;
+	}
+	const host = url.hostname;
+	if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]") return true;
+	const noProxy = process.env.NO_PROXY ?? process.env.no_proxy ?? "";
+	if (noProxy.trim().length === 0) return false;
+	const probe = host.toLowerCase();
+	for (const entry of noProxy.split(",")) {
+		const domain = entry.trim().toLowerCase();
+		if (domain.length === 0) continue;
+		if (domain === "*") return true;
+		if (domain.startsWith(".")) {
+			if (probe.endsWith(domain) && probe.length > domain.length) return true;
+		} else if (probe === domain || probe.endsWith(`.${domain}`)) {
+			return true;
+		}
+	}
+	return false;
+}
+/** Grok (xAI) hosts the proxy applies to. Everything else stays direct. */
+const GROK_PROXY_DOMAIN = /(?:^|\.)(?:x\.ai|grok\.com)$/iu;
+/**
+* True for requests that must be routed through the proxy: xAI OAuth,
+* cli-chat-proxy chat, and Grok Imagine. Other providers (DeepSeek, …)
+* keep their default (direct) transport even when a proxy is configured.
+* @param input - fetch RequestInfo.
+*/
+function isGrokRequest(input) {
+	try {
+		const url = typeof input === "string" ? new URL(input) : new URL(input.url);
+		return GROK_PROXY_DOMAIN.test(url.hostname);
+	} catch {
+		return false;
+	}
+}
+/** Turn a thrown network error into the sign-in retryable reply. */
+function authNetworkHint(error) {
+	const detail = error instanceof Error && error.message.length > 0 ? error.message : "connection failed";
+	return `Could not reach auth.x.ai (${detail}). Check the plugin proxy setting or HTTPS_PROXY, then try again.`;
+}
+/** Read the IdP rejection body and build a safe, actionable hint. */
+async function authRejectionHint(response, secrets) {
+	let detail = "";
+	try {
+		const body = await response.json();
+		if (isRecord$6(body)) {
+			const error = readString(body, "error");
+			const description = readString(body, "error_description");
+			detail = [error, description].filter((part) => part !== void 0).join(" — ");
+		}
+	} catch {
+		// body is not JSON; keep the status-only hint
+	}
+	detail = redactSecrets(detail, secrets);
+	return `auth.x.ai rejected the sign-in (HTTP ${response.status})${detail.length > 0 ? `: ${detail}` : ""}.`;
+}
 function readString(record, key) {
 	const value = record[key];
 	return typeof value === "string" && value.length > 0 ? value : void 0;
@@ -777,7 +931,12 @@ async function parseTokenResponse(response, now, userinfoEndpoint, fetchImpl, pr
 	};
 }
 /**
-* Exchange a refresh token. Callers delete the session when this returns undefined.
+* Exchange a refresh token.
+*
+* `{ ok: false, network: true }` means the IdP was unreachable (transient
+* or proxy/routing problem) and the stored session should be kept;
+* `{ ok: false }` means the refresh token was rejected and the session
+* must be cleared.
 * @param runtime - Host OAuth runtime.
 * @param session - current session.
 */
@@ -798,12 +957,19 @@ async function refreshSession(runtime, session) {
 			})
 		});
 	} catch {
-		return;
+		return { ok: false, network: true };
 	}
-	return parseTokenResponse(response, runtime.now(), endpoints.userinfoEndpoint, runtime.fetch, session);
+	if (!response.ok) return { ok: false };
+	const refreshed = await parseTokenResponse(response, runtime.now(), endpoints.userinfoEndpoint, runtime.fetch, session);
+	if (refreshed === void 0) return { ok: false };
+	return { ok: true, session: refreshed };
 }
 /**
 * Return a session that is not near expiry, refreshing or clearing as needed.
+*
+* A refresh failure never deletes the session when the IdP is merely
+* unreachable (network/proxy): the old session is returned so a later
+* request can retry instead of silently signing the user out.
 * @param runtime - Host OAuth runtime.
 */
 async function ensureFreshSession(runtime) {
@@ -812,12 +978,13 @@ async function ensureFreshSession(runtime) {
 	if (session === void 0) return void 0;
 	if (Date.parse(session.expiresAt) - runtime.now() > runtime.refreshSkewMs) return session;
 	const refreshed = await refreshSession(runtime, session);
-	if (refreshed === void 0) {
+	if (!refreshed.ok) {
+		if (refreshed.network === true) return session;
 		await deleteSession(path);
 		return;
 	}
-	await writeSession(path, refreshed);
-	return refreshed;
+	await writeSession(path, refreshed.session);
+	return refreshed.session;
 }
 const CALLBACK_OK = "<!doctype html><title>Grok</title><p>Sign-in complete. You can close this window.</p>";
 const CALLBACK_FAIL = "<!doctype html><title>Grok</title><p>Sign-in did not complete. You can close this window and try again.</p>";
@@ -959,21 +1126,30 @@ async function startPkceLogin(runtime, signal) {
 		const result = await Promise.race([callback, pasted]);
 		if (result.kind === "mismatch") return retryable("Sign-in rejected a mismatched state.");
 		if (result.kind === "denied") return retryable("Sign-in did not complete.");
-		const session = await parseTokenResponse(await runtime.fetch(endpoints.tokenEndpoint, {
-			method: "POST",
-			headers: {
-				"content-type": "application/x-www-form-urlencoded",
-				accept: "application/json"
-			},
-			body: new URLSearchParams({
-				grant_type: "authorization_code",
-				code: result.code,
-				redirect_uri: redirectUri,
-				client_id: runtime.clientId,
-				code_verifier: pkce.verifier
-			})
-		}), runtime.now(), endpoints.userinfoEndpoint, runtime.fetch);
-		if (session === void 0) return retryable("Sign-in could not be completed.");
+		let tokenResponse;
+		try {
+			tokenResponse = await runtime.fetch(endpoints.tokenEndpoint, {
+				method: "POST",
+				headers: {
+					"content-type": "application/x-www-form-urlencoded",
+					accept: "application/json"
+				},
+				body: new URLSearchParams({
+					grant_type: "authorization_code",
+					code: result.code,
+					redirect_uri: redirectUri,
+					client_id: runtime.clientId,
+					code_verifier: pkce.verifier
+				})
+			});
+		} catch (error) {
+			return retryable(authNetworkHint(error));
+		}
+		if (!tokenResponse.ok) {
+			return retryable(await authRejectionHint(tokenResponse, [result.code, pkce.verifier]));
+		}
+		const session = await parseTokenResponse(tokenResponse, runtime.now(), endpoints.userinfoEndpoint, runtime.fetch);
+		if (session === void 0) return retryable("auth.x.ai returned an unexpected token response. Try signing in again.");
 		await writeSession(runtime.resolveSessionPath(), session);
 		return { ok: true };
 	} catch (error) {
@@ -1314,14 +1490,20 @@ function catalogFor(model, models) {
 		thinking: model.reasoning
 	};
 }
-function withGrokResponsesBody(streamFn, models) {
+function withGrokResponsesBody(streamFn, models, serverSearch) {
 	return (model, context, options) => {
 		const original = options?.onPayload;
 		return streamFn(model, context, {
 			...options,
 			onPayload: async (payload, nextModel) => {
 				const next = original === void 0 ? payload : await original(payload, nextModel);
-				return expandPackedGrokReasoningInput(applyGrokReasoningWire(injectGrokServerSearchTools(next === void 0 ? payload : next), catalogFor(nextModel, models)));
+				const body = next === void 0 ? payload : next;
+				const wired = applyGrokReasoningWire(body, catalogFor(nextModel, models));
+				// Packed Grok reasoning items (server-search results, tco_*) must
+				// ALWAYS expand back to real items, even when server search is
+				// off: history from an earlier server-search session may carry them.
+				if (serverSearch === true) return expandPackedGrokReasoningInput(injectGrokServerSearchTools(wired));
+				return expandPackedGrokReasoningInput(wired);
 			}
 		});
 	};
@@ -1334,11 +1516,11 @@ function withGrokResponsesBody(streamFn, models) {
 function withHiddenOpaqueThinking(streamFn) {
 	return (model, context, options) => filterGrokThinkingStream(streamFn(model, context, options));
 }
-function grokResponsesApi(models = []) {
+function grokResponsesApi(models = [], serverSearch = false) {
 	const base = openAIResponsesApi();
 	return {
-		stream: withHiddenOpaqueThinking(withGrokResponsesBody(base.stream, models)),
-		streamSimple: withHiddenOpaqueThinking(withGrokResponsesBody(base.streamSimple, models))
+		stream: withHiddenOpaqueThinking(withGrokResponsesBody(base.stream, models, serverSearch)),
+		streamSimple: withHiddenOpaqueThinking(withGrokResponsesBody(base.streamSimple, models, serverSearch))
 	};
 }
 //#endregion
@@ -1419,7 +1601,7 @@ function createGrokPiAiProfile(connection) {
 		baseUrl: baseURL,
 		auth: grokAuth(),
 		models,
-		api: grokResponsesApi(source),
+		api: grokResponsesApi(source, connection.serverSearch === true),
 		headers
 	});
 	return {
@@ -2404,6 +2586,8 @@ function resolveAdapterOptions(config) {
 		baseURL: GROK_CHAT_BASE_URL,
 		models: resolveModels(config.models),
 		streamIdleTimeoutMs,
+		serverSearch: config.serverSearch === true,
+		proxy: typeof config.proxy === "string" ? config.proxy : "",
 		retryPolicy: resolveRetryPolicy(config.retryPolicy ?? {
 			mode: "normal",
 			maxRetries: DEFAULT_MAX_RETRIES
@@ -2424,6 +2608,8 @@ const Config = z.object({
 	streamIdleTimeoutMs: z.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS).default(GROK_DEFAULT_STREAM_IDLE_TIMEOUT_MS),
 	models: z.array(catalogModel),
 	enableImageGen: z.boolean().default(false),
+	serverSearch: z.boolean().default(false),
+	proxy: z.string().default(""),
 	retryPolicy: RetryPolicySchema
 });
 function internalError(message) {
@@ -2544,6 +2730,16 @@ async function saveDisplayedCatalog(ctx, payload) {
 			path: ["enableImageGen"],
 			value: request.enableImageGen
 		});
+		if (request.serverSearch !== void 0 && current.serverSearch !== request.serverSearch) ops.push({
+			op: "set",
+			path: ["serverSearch"],
+			value: request.serverSearch
+		});
+		if (request.proxy !== void 0 && current.proxy !== request.proxy) ops.push({
+			op: "set",
+			path: ["proxy"],
+			value: request.proxy
+		});
 		if (ops.length > 0) await settings.mutate(NS, ops, request.expectedRevision);
 		const accepted = settings.describe().find((descriptor) => descriptor.ns === NS);
 		const acceptedSettings = decodeGrokSettings(accepted?.value);
@@ -2580,7 +2776,35 @@ function apply(ctx, config) {
 		}
 	};
 	options();
-	const runtime = createGrokAuthRuntime({ resolveSessionPath: () => resolveGrokSessionPath(ctx) });
+	// The proxy transport is rebuilt whenever the settings section changes,
+	// so a proxy saved from the settings card takes effect without a restart.
+	// pi-ai's chat streaming and the Imagine downloader call the bare global
+	// fetch, which has no injection point of its own, so when a proxy is
+	// active the global fetch is wrapped — but ONLY Grok (x.ai / grok.com)
+	// requests are routed through it. Every other provider (DeepSeek, …) and
+	// loopback / NO_PROXY hosts keep the original direct transport.
+	let grokFetch = globalThis.fetch;
+	let originalFetch;
+	const patchGlobalFetch = () => {
+		if (originalFetch !== void 0) return;
+		originalFetch = globalThis.fetch;
+		globalThis.fetch = (input, init) => isGrokRequest(input) && !shouldBypassProxy(input) ? grokFetch(input, init) : originalFetch(input, init);
+	};
+	const unpatchGlobalFetch = () => {
+		if (originalFetch === void 0) return;
+		globalThis.fetch = originalFetch;
+		originalFetch = void 0;
+	};
+	const applyTransport = () => {
+		grokFetch = createGrokFetch(options().proxy, ctx.logger);
+		if (hasActiveProxy(options().proxy)) patchGlobalFetch();
+		else unpatchGlobalFetch();
+	};
+	applyTransport();
+	const runtime = createGrokAuthRuntime({
+		resolveSessionPath: () => resolveGrokSessionPath(ctx),
+		fetch: (input, init) => grokFetch(input, init)
+	});
 	const adapter = new GrokAdapter({
 		options,
 		resolveApiKey: () => resolveGrokAccessToken(runtime),
@@ -2639,6 +2863,7 @@ function apply(ctx, config) {
 	};
 	function scheduleCapabilities() {
 		ensureRegistrationFacts();
+		applyTransport();
 		imageGenTail = imageGenTail.then(reconcileImageGen, reconcileImageGen).catch((error) => {
 			ctx.logger.error("llm-grok: could not apply the updated grok_image_gen configuration");
 			ctx.logger.error(error);
@@ -2647,6 +2872,7 @@ function apply(ctx, config) {
 	scheduleCapabilities();
 	ctx.effect(() => async () => {
 		stopped = true;
+		unpatchGlobalFetch();
 		await imageGenTail;
 		const imageGen = imageGenFiber;
 		imageGenFiber = void 0;
@@ -2654,4 +2880,4 @@ function apply(ctx, config) {
 	});
 }
 //#endregion
-export { Config, DEFAULT_USAGE_REQUEST_TIMEOUT_MS, GROK_4_5_REASONING_EFFORTS, GROK_4_6_REASONING_EFFORTS, GROK_AUTH_COMPLETE_ENDPOINT, GROK_AUTH_LOGOUT_ENDPOINT, GROK_AUTH_START_ENDPOINT, GROK_AUTH_STATUS_ENDPOINT, GROK_BILLING_URL, GROK_CATALOG, GROK_CHAT_BASE_URL, GROK_DEFAULT_CONTEXT_WINDOW, GROK_DEFAULT_MODEL_MAX_TOKENS, GROK_DEFAULT_REASONING_WIRE, GROK_DEFAULT_STREAM_IDLE_TIMEOUT_MS, GROK_IMAGE_GEN_TOOL_NAME, GROK_IMAGINE_ASPECT_RATIOS, GROK_IMAGINE_BASE_URL, GROK_IMAGINE_MODEL, GROK_MODELS_ENDPOINT, GROK_MODELS_URL, GROK_OAUTH_CLIENT_ID, GROK_OAUTH_ISSUER, GROK_OAUTH_SCOPE, GROK_PACKED_REASONING_TYPE, GROK_PLUGIN_IDENTITY_HEADER, GROK_PROVIDER, GROK_REASONING_WIRES, GROK_RPC_CHANNEL, GROK_SAVE_ENDPOINT, GROK_SERVER_SEARCH_TOOLS, GROK_SESSION_FILENAME, GROK_SETTINGS_NAMESPACE, GROK_USAGE_ENDPOINT, GrokAdapter, apply, applyGrokReasoningWire, completePkceLogin, createGrokAuthRuntime, createGrokPiAiProfile, createGrokRpcHandler, decodeGrokAuthCompleteRequest, decodeGrokAuthLogoutReply, decodeGrokAuthStartReply, decodeGrokAuthStatus, decodeGrokEmptyRequest, decodeGrokModelsReply, decodeGrokSaveRequest, decodeGrokSaveResult, decodeGrokSettings, decodeGrokUsageReply, decodeGrokUsageView, deleteSession, ensureFreshSession, expandPackedGrokReasoningInput, fallbackGrokCatalog, filterGrokThinkingStream, generateGrokImage, grokImageGenTool, grokResponsesApi, grokThinkingLevelMap, inject, injectGrokServerSearchTools, isDisplayableThinking, isGrokPackedReasoning, isGrokServerSearchToolCallId, name, officialDefaultEffort, officialEffortsFor, packGrokThinkingBlocks, parseGrokBilling, parseGrokModels, readGrokModels, readGrokUsage, readSession, refreshSession, resolveAdapterOptions, resolveGrokAccessToken, resolveGrokReasoningWire, resolveGrokSessionPath, sessionPathForHome, startPkceLogin, statusFromSession, stripGrokServerSearchToolCalls, writeSession };
+export { Config, DEFAULT_USAGE_REQUEST_TIMEOUT_MS, GROK_4_5_REASONING_EFFORTS, GROK_4_6_REASONING_EFFORTS, GROK_AUTH_COMPLETE_ENDPOINT, GROK_AUTH_LOGOUT_ENDPOINT, GROK_AUTH_START_ENDPOINT, GROK_AUTH_STATUS_ENDPOINT, GROK_BILLING_URL, GROK_CATALOG, GROK_CHAT_BASE_URL, GROK_DEFAULT_CONTEXT_WINDOW, GROK_DEFAULT_MODEL_MAX_TOKENS, GROK_DEFAULT_REASONING_WIRE, GROK_DEFAULT_STREAM_IDLE_TIMEOUT_MS, GROK_IMAGE_GEN_TOOL_NAME, GROK_IMAGINE_ASPECT_RATIOS, GROK_IMAGINE_BASE_URL, GROK_IMAGINE_MODEL, GROK_MODELS_ENDPOINT, GROK_MODELS_URL, GROK_OAUTH_CLIENT_ID, GROK_OAUTH_ISSUER, GROK_OAUTH_SCOPE, GROK_PACKED_REASONING_TYPE, GROK_PLUGIN_IDENTITY_HEADER, GROK_PROVIDER, GROK_REASONING_WIRES, GROK_RPC_CHANNEL, GROK_SAVE_ENDPOINT, GROK_SERVER_SEARCH_TOOLS, GROK_SESSION_FILENAME, GROK_SETTINGS_NAMESPACE, GROK_USAGE_ENDPOINT, GrokAdapter, apply, applyGrokReasoningWire, authNetworkHint, authRejectionHint, completePkceLogin, createGrokAuthRuntime, createGrokFetch, createGrokPiAiProfile, createGrokRpcHandler, decodeGrokAuthCompleteRequest, decodeGrokAuthLogoutReply, decodeGrokAuthStartReply, decodeGrokAuthStatus, decodeGrokEmptyRequest, decodeGrokModelsReply, decodeGrokSaveRequest, decodeGrokSaveResult, decodeGrokSettings, decodeGrokUsageReply, decodeGrokUsageView, deleteSession, ensureFreshSession, expandPackedGrokReasoningInput, fallbackGrokCatalog, filterGrokThinkingStream, generateGrokImage, grokImageGenTool, grokResponsesApi, hasActiveProxy, grokThinkingLevelMap, inject, injectGrokServerSearchTools, isDisplayableThinking, isGrokRequest, isGrokPackedReasoning, isGrokServerSearchToolCallId, name, officialDefaultEffort, officialEffortsFor, packGrokThinkingBlocks, parseGrokBilling, parseGrokModels, readGrokModels, readGrokUsage, readSession, refreshSession, resolveAdapterOptions, resolveGrokAccessToken, resolveGrokReasoningWire, resolveGrokSessionPath, resolveProxySetting, sessionPathForHome, startPkceLogin, statusFromSession, stripGrokServerSearchToolCalls, writeSession };

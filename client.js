@@ -95,10 +95,16 @@ window.__ModuleLoader__.load({
 			if (typeof streamIdleTimeoutMs !== "number" || !Number.isFinite(streamIdleTimeoutMs) || streamIdleTimeoutMs <= 0) return;
 			const modelsValue = value["models"];
 			const enableImageGen = value["enableImageGen"] === true;
+			const serverSearch = value["serverSearch"];
+			if (serverSearch !== void 0 && typeof serverSearch !== "boolean") return void 0;
+			const proxy = value["proxy"];
+			if (proxy !== void 0 && typeof proxy !== "string") return void 0;
 			if (modelsValue === void 0) return {
 				streamIdleTimeoutMs,
 				models: GROK_CATALOG.map((model) => ({ ...model })),
-				enableImageGen
+				enableImageGen,
+				...typeof serverSearch === "boolean" ? { serverSearch } : {},
+				...typeof proxy === "string" ? { proxy } : {}
 			};
 			if (!Array.isArray(modelsValue)) return void 0;
 			const models = [];
@@ -110,7 +116,9 @@ window.__ModuleLoader__.load({
 			return {
 				streamIdleTimeoutMs,
 				models,
-				enableImageGen
+				enableImageGen,
+				...typeof serverSearch === "boolean" ? { serverSearch } : {},
+				...typeof proxy === "string" ? { proxy } : {}
 			};
 		}
 		/**
@@ -1606,6 +1614,10 @@ window.__ModuleLoader__.load({
 			const [usageUpdatedAt, setUsageUpdatedAt] = (0, react.useState)(void 0);
 			const [enableImageGen, setEnableImageGen] = (0, react.useState)(snapshot.value?.enableImageGen === true);
 			const [sourceEnableImageGen, setSourceEnableImageGen] = (0, react.useState)(snapshot.value?.enableImageGen === true);
+			const [serverSearch, setServerSearch] = (0, react.useState)(snapshot.value?.serverSearch === true);
+			const [sourceServerSearch, setSourceServerSearch] = (0, react.useState)(snapshot.value?.serverSearch === true);
+			const [proxy, setProxy] = (0, react.useState)(snapshot.value?.proxy ?? "");
+			const [sourceProxy, setSourceProxy] = (0, react.useState)(snapshot.value?.proxy ?? "");
 			const [catalogOpen, setCatalogOpen] = (0, react.useState)(false);
 			const [expandedModels, setExpandedModels] = (0, react.useState)(/* @__PURE__ */ new Set());
 			const [busy, setBusy] = (0, react.useState)(false);
@@ -1615,7 +1627,7 @@ window.__ModuleLoader__.load({
 			const title = t("title");
 			const signingIn = auth.kind === "signing-in";
 			const disabled = snapshot.status !== "ready" || !snapshot.writable || busy;
-			const dirty = source !== void 0 && draft !== void 0 && !sameDraft(source, draft) || enableImageGen !== sourceEnableImageGen;
+			const dirty = source !== void 0 && draft !== void 0 && !sameDraft(source, draft) || enableImageGen !== sourceEnableImageGen || serverSearch !== sourceServerSearch || proxy !== sourceProxy;
 			const invalid = draft !== void 0 && modelFailure(draft);
 			const customModels = snapshot.user !== void 0 && Object.prototype.hasOwnProperty.call(snapshot.user, "models");
 			(0, react.useEffect)(() => {
@@ -1627,6 +1639,10 @@ window.__ModuleLoader__.load({
 				setDraft(next);
 				setEnableImageGen(snapshot.value.enableImageGen);
 				setSourceEnableImageGen(snapshot.value.enableImageGen);
+				setServerSearch(snapshot.value.serverSearch === true);
+				setSourceServerSearch(snapshot.value.serverSearch === true);
+				setProxy(snapshot.value.proxy ?? "");
+				setSourceProxy(snapshot.value.proxy ?? "");
 				setSourceRevision(snapshot.revision);
 			}, [
 				dirty,
@@ -1729,6 +1745,22 @@ window.__ModuleLoader__.load({
 				}));
 			};
 			const onSignIn = async () => {
+				// The Host token exchange runs with the *saved* proxy setting, so
+				// persist an unsaved proxy draft before starting the sign-in.
+				if (proxy !== sourceProxy && snapshot.value !== void 0) {
+					try {
+						const accepted = await props.saveConfiguration({
+							...snapshot.value,
+							proxy
+						});
+						setProxy(accepted.settings.proxy ?? "");
+						setSourceProxy(accepted.settings.proxy ?? "");
+						setSourceRevision(accepted.revision);
+						setNotice(t("proxyAutoSaved"));
+					} catch {
+						// The sign-in attempt below will surface the network error.
+					}
+				}
 				setAuth({ kind: "signing-in" });
 				setPasteCode("");
 				setUsage({ status: "idle" });
@@ -1831,6 +1863,8 @@ window.__ModuleLoader__.load({
 			const discard = () => {
 				if (source !== void 0) setDraft(source.map((model) => ({ ...model })));
 				setEnableImageGen(sourceEnableImageGen);
+				setServerSearch(sourceServerSearch);
+				setProxy(sourceProxy);
 				setFailure(void 0);
 				setNotice(void 0);
 			};
@@ -1843,13 +1877,19 @@ window.__ModuleLoader__.load({
 					const accepted = await props.saveConfiguration({
 						...snapshot.value,
 						models: draft.map(modelSettingsOf),
-						enableImageGen
+						enableImageGen,
+						serverSearch,
+						proxy
 					});
 					const next = accepted.settings.models.map(modelDraftOf);
 					setSource(next);
 					setDraft(next);
 					setEnableImageGen(accepted.settings.enableImageGen);
 					setSourceEnableImageGen(accepted.settings.enableImageGen);
+					setServerSearch(accepted.settings.serverSearch === true);
+					setSourceServerSearch(accepted.settings.serverSearch === true);
+					setProxy(accepted.settings.proxy ?? "");
+					setSourceProxy(accepted.settings.proxy ?? "");
 					setSourceRevision(accepted.revision);
 					setNotice(t("saved"));
 				} catch (error) {
@@ -2259,9 +2299,56 @@ window.__ModuleLoader__.load({
 										setNotice(void 0);
 									}
 								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)(Capability, {
+									label: t("serverSearch"),
+									checked: serverSearch,
+									disabled,
+									onChange: (checked) => {
+										setServerSearch(checked);
+										setFailure(void 0);
+										setNotice(void 0);
+									}
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+									style: hintStyle,
+									children: t("serverSearchHelp")
+								}),
 								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
 									style: hintStyle,
 									children: t("enableImageGenHelp")
+								})
+							]
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("section", {
+							style: sectionStyle,
+							"aria-label": t("network"),
+							children: [
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+									style: sectionTitleStyle,
+									children: t("network")
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("label", {
+									style: labelStyle,
+									htmlFor: "grok-oauth-proxy",
+									children: t("proxyLabel")
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+									id: "grok-oauth-proxy",
+									style: inputStyle,
+									value: proxy,
+									autoComplete: "off",
+									spellCheck: false,
+									"aria-label": t("proxyLabel"),
+									placeholder: t("proxyPlaceholder"),
+									onChange: (event) => {
+										setProxy(event.target.value);
+										setFailure(void 0);
+										setNotice(void 0);
+									}
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+									style: hintStyle,
+									children: t("proxyHelp")
 								})
 							]
 						}),
@@ -2659,7 +2746,14 @@ window.__ModuleLoader__.load({
 			usageResetAtDays: "Usage limits reset on {date} ({count} days left)",
 			capabilities: "Capabilities",
 			enableImageGen: "Enable grok_image_gen tool",
-			enableImageGenHelp: "Lets any conversation model draw with Grok Imagine using this SuperGrok login. Distinct from Codex codex_generate_image."
+			enableImageGenHelp: "Lets any conversation model draw with Grok Imagine using this SuperGrok login. Distinct from Codex codex_generate_image.",
+			serverSearch: "Grok server-side search (experimental)",
+			serverSearchHelp: "Injects Grok\u2019s own web_search / x_search. Results come back encrypted and are only replayed on the next request, so keep off to let Grok use DSH\u2019s own tools in the agent loop; turn on only if you rely on the Grok Build-style server search.",
+			network: "Network",
+			proxyLabel: "HTTP proxy (Grok traffic only)",
+			proxyPlaceholder: "e.g. 127.0.0.1:7897 (leave empty to follow the environment)",
+			proxyHelp: "Only x.ai / grok.com requests (sign-in, Grok chat, Imagine) use this proxy; other models such as DeepSeek stay on the direct connection. Empty = use HTTPS_PROXY / ALL_PROXY from the environment; with no such variables the plugin connects directly. Enter direct to force a direct connection.",
+			proxyAutoSaved: "Proxy saved. Starting sign-in…"
 		};
 		/** Chinese Grok configuration copy. */
 		const zh = {
@@ -2728,7 +2822,14 @@ window.__ModuleLoader__.load({
 			usageResetAtDays: "重置时间：{date}（还剩 {count} 天）",
 			capabilities: "能力",
 			enableImageGen: "启用 grok_image_gen 工具",
-			enableImageGenHelp: "让任意会话模型用本卡的 SuperGrok 登录调用 Grok Imagine 生图。与 Codex 的 codex_generate_image 不同名。"
+			enableImageGenHelp: "让任意会话模型用本卡的 SuperGrok 登录调用 Grok Imagine 生图。与 Codex 的 codex_generate_image 不同名。",
+			serverSearch: "Grok 服务端搜索（实验）",
+			serverSearchHelp: "注入 Grok 自带的 web_search / x_search。搜索结果以加密项回传且只在下一请求回放，agent 循环拿不到结果；建议保持关闭，让 Grok 走 DSH 自己的工具循环。仅当你依赖 Grok Build 风格的服务端搜索时开启。",
+			network: "网络",
+			proxyLabel: "HTTP 代理（仅 Grok 流量）",
+			proxyPlaceholder: "如 127.0.0.1:7897（留空 = 跟随环境变量）",
+			proxyHelp: "只有 x.ai / grok.com 的请求（登录、Grok 对话、Imagine）走此代理；DeepSeek 等其他模型保持直连不受影响。留空 = 跟随环境变量 HTTPS_PROXY / ALL_PROXY；没有环境变量时直连。本机代理没导出到环境变量（如 Clash TUN 模式）请填 127.0.0.1:7897；填 direct 强制直连。",
+			proxyAutoSaved: "代理已保存，开始登录…"
 		};
 		//#endregion
 		//#region src/client/index.ts
@@ -2817,6 +2918,8 @@ window.__ModuleLoader__.load({
 				const saved = await rpc.call(GROK_RPC_CHANNEL, GROK_SAVE_ENDPOINT, {
 					models: settings.models,
 					enableImageGen: settings.enableImageGen,
+					...settings.serverSearch === void 0 ? {} : { serverSearch: settings.serverSearch },
+					...settings.proxy === void 0 ? {} : { proxy: settings.proxy },
 					expectedRevision: snapshot.revision
 				});
 				if (!saved.ok) throw new Error(saved.error.message);
