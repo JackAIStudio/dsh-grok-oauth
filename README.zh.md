@@ -28,25 +28,23 @@ DeepSeek Harness 自有、独立维护的 **Grok (xAI) 供应商插件**。
 
 源码在 `~/Documents/dshspace/plugins/dsh-grok-oauth`。
 
+本插件 host 侧会 `import "@deepseek-ai/schemastery"` 等 DSH 包，**必须用 `file:`（或 github:）装进 profile**。不要用 `link:`：Node ESM 会从源码目录解析依赖，找不到宿主的 peer，`dsh web` 会直接起不来。不要再写脚本去手工链 peer。
+
 ```bash
-# 开发机（symlink，改源码立刻生效）
-dsh plugin --profile web add link:$HOME/Documents/dshspace/plugins/dsh-grok-oauth
+# 开发机：复制进 profile/node_modules，依赖按宿主解析
+dsh plugin --profile web add file:$HOME/Documents/dshspace/plugins/dsh-grok-oauth
 
 # 新电脑
 dsh plugin --profile web add github:JackAIStudio/dsh-grok-oauth
 ```
 
-然后重启 `dsh web`。
-
-开发机用 `link:` 时，还要在插件目录补上 host 侧 peer（否则 `dsh web` 会因找不到 `@deepseek-ai/schemastery` 起不来）：
+改源码后：
 
 ```bash
-cd "$HOME/Documents/dshspace/plugins/dsh-grok-oauth"
-npm install --omit=dev --ignore-scripts   # 装 undici 等自身依赖
-./scripts/link-host-peers.sh             # 把 ~/.dsh/profiles 里的 DSH peer 链回来
+corepack pnpm install --dir "$HOME/.dsh/profiles/web"
 ```
 
-`node_modules/` 已 gitignore，不要提交。`npm install` 会清掉 peer 软链，装完后重新跑一次 `link-host-peers.sh`。
+然后重启 `dsh web`。host 插件反正要重启才能加载新的 `index.js`，没有「改完立刻生效」这回事。
 
 ## 目录结构
 
