@@ -21,8 +21,14 @@ window.__ModuleLoader__.load({
 		const GROK_AUTH_LOGOUT_ENDPOINT = "auth/logout";
 		/** Deliver a Grok Build paste-code into the in-flight PKCE exchange. */
 		const GROK_AUTH_COMPLETE_ENDPOINT = "auth/complete";
+		/** Switch the active saved account. */
+		const GROK_AUTH_SWITCH_ENDPOINT = "auth/switch";
+		/** Remove one saved account by id. */
+		const GROK_AUTH_REMOVE_ENDPOINT = "auth/remove";
 		/** Secret-free subscription-usage snapshot inside {@link GROK_RPC_CHANNEL}. */
 		const GROK_USAGE_ENDPOINT = "usage/read";
+		/** Secret-free usage snapshot for every saved account, without switching the active one. */
+		const GROK_USAGE_ALL_ENDPOINT = "usage/readAll";
 		/**
 		* Offline fallback when the account catalog cannot be read. Live ids come
 		* from GET /v1/models-v2 after sign-in.
@@ -126,9 +132,37 @@ window.__ModuleLoader__.load({
 		* @param value - untrusted RPC result value.
 		* @returns the validated reply, or undefined when it is malformed or carries secrets.
 		*/
+		function decodeGrokAuthAccountView(value) {
+			if (!isRecord(value) || hasTokenFields(value)) return void 0;
+			const id = value["id"];
+			const email = value["email"];
+			const expiresAt = value["expiresAt"];
+			const active = value["active"];
+			if (typeof id !== "string" || id.length === 0) return void 0;
+			if (!optionalNonEmptyString(email) || !optionalNonEmptyString(expiresAt)) return void 0;
+			if (active !== void 0 && typeof active !== "boolean") return void 0;
+			return {
+				id,
+				...email === void 0 ? {} : { email },
+				...expiresAt === void 0 ? {} : { expiresAt },
+				active: active === true
+			};
+		}
 		function decodeGrokAuthStartReply(value) {
 			if (!isRecord(value) || hasTokenFields(value) || typeof value["ok"] !== "boolean") return void 0;
-			if (value["ok"] === true) return { ok: true };
+			if (value["ok"] === true) {
+				const reused = value["reused"];
+				const email = value["email"];
+				const accountId = value["accountId"];
+				if (reused !== void 0 && typeof reused !== "boolean") return void 0;
+				if (!optionalNonEmptyString(email) || !optionalNonEmptyString(accountId)) return void 0;
+				return {
+					ok: true,
+					...reused === true ? { reused: true } : {},
+					...email === void 0 ? {} : { email },
+					...accountId === void 0 ? {} : { accountId }
+				};
+			}
 			if (value["retryable"] !== true || typeof value["message"] !== "string" || value["message"].length === 0) return;
 			return {
 				ok: false,
@@ -145,11 +179,24 @@ window.__ModuleLoader__.load({
 			if (!isRecord(value) || hasTokenFields(value) || typeof value["loggedIn"] !== "boolean") return void 0;
 			const email = value["email"];
 			const expiresAt = value["expiresAt"];
-			if (!optionalNonEmptyString(email) || !optionalNonEmptyString(expiresAt)) return void 0;
+			const activeAccountId = value["activeAccountId"];
+			if (!optionalNonEmptyString(email) || !optionalNonEmptyString(expiresAt) || !optionalNonEmptyString(activeAccountId)) return void 0;
+			const accounts = [];
+			const accountsValue = value["accounts"];
+			if (accountsValue !== void 0) {
+				if (!Array.isArray(accountsValue)) return void 0;
+				for (const entry of accountsValue) {
+					const account = decodeGrokAuthAccountView(entry);
+					if (account === void 0) return void 0;
+					accounts.push(account);
+				}
+			}
 			return {
 				loggedIn: value["loggedIn"],
 				...email === void 0 ? {} : { email },
-				...expiresAt === void 0 ? {} : { expiresAt }
+				...expiresAt === void 0 ? {} : { expiresAt },
+				...activeAccountId === void 0 ? {} : { activeAccountId },
+				accounts
 			};
 		}
 		/**
@@ -158,8 +205,21 @@ window.__ModuleLoader__.load({
 		* @returns the validated reply, or undefined when it is malformed or carries secrets.
 		*/
 		function decodeGrokAuthLogoutReply(value) {
-			if (!isRecord(value) || hasTokenFields(value) || value["ok"] !== true) return void 0;
-			return { ok: true };
+			if (!isRecord(value) || hasTokenFields(value) || typeof value["ok"] !== "boolean") return void 0;
+			if (value["ok"] !== true) {
+				if (value["retryable"] !== true || typeof value["message"] !== "string" || value["message"].length === 0) return;
+				return {
+					ok: false,
+					retryable: true,
+					message: value["message"]
+				};
+			}
+			const status = value["status"] === void 0 ? void 0 : decodeGrokAuthStatus(value["status"]);
+			if (value["status"] !== void 0 && status === void 0) return void 0;
+			return {
+				ok: true,
+				...status === void 0 ? {} : { status }
+			};
 		}
 		function decodeGrokUsageWindow(value) {
 			if (!isRecord(value) || hasTokenFields(value)) return void 0;
@@ -294,6 +354,100 @@ window.__ModuleLoader__.load({
 			return usage === void 0 ? void 0 : {
 				status: "ok",
 				usage
+			};
+		}
+		function decodeGrokAccountUsageView(value) {
+			if (!isRecord(value) || hasTokenFields(value)) return void 0;
+			const accountId = value["accountId"];
+			const email = value["email"];
+			const active = value["active"];
+			const status = value["status"];
+			if (typeof accountId !== "string" || accountId.length === 0) return void 0;
+			if (!optionalNonEmptyString(email)) return void 0;
+			if (typeof active !== "boolean") return void 0;
+			if (status === "unsupported") return {
+				accountId,
+				...email === void 0 ? {} : { email },
+				active,
+				status: "unsupported"
+			};
+			if (status === "error") {
+				const message = value["message"];
+				if (typeof message !== "string" || message.length === 0) return void 0;
+				return {
+					accountId,
+					...email === void 0 ? {} : { email },
+					active,
+					status: "error",
+					message
+				};
+			}
+			if (status !== "ok") return void 0;
+			const usage = decodeGrokUsageView(value["usage"]);
+			return usage === void 0 ? void 0 : {
+				accountId,
+				...email === void 0 ? {} : { email },
+				active,
+				status: "ok",
+				usage
+			};
+		}
+		function decodeGrokAccountsUsageReply(value) {
+			if (!isRecord(value) || hasTokenFields(value)) return void 0;
+			if (value["status"] === "logged-out") return {
+				status: "logged-out",
+				accounts: []
+			};
+			if (value["status"] !== "ok" || !Array.isArray(value["accounts"])) return void 0;
+			const accounts = [];
+			for (const entry of value["accounts"]) {
+				const decoded = decodeGrokAccountUsageView(entry);
+				if (decoded === void 0) return void 0;
+				accounts.push(decoded);
+			}
+			return {
+				status: "ok",
+				accounts
+			};
+		}
+		function isTotalUsageWindow(id) {
+			return id === "SuperGrok" || id === "weekly";
+		}
+		function usageWindowLabelOf(id, t) {
+			if (id === "SuperGrok" || id === "weekly") return t("usageWindowSuperGrok");
+			if (id === "GrokBuild") return t("usageWindowGrokBuild");
+			if (id === "GrokImagine") return t("usageWindowGrokImagine");
+			if (id === "GrokAppBuilder") return t("usageWindowGrokAppBuilder");
+			return id;
+		}
+		function splitUsageWindows(windows) {
+			return {
+				total: windows.find((window) => isTotalUsageWindow(window.id)),
+				products: windows.filter((window) => !isTotalUsageWindow(window.id))
+			};
+		}
+		function officialUsedPercent(usage) {
+			const { total, products } = splitUsageWindows(usage.windows);
+			if (total !== void 0 && total.unit === "percent") return total.used;
+			if (products.length > 0 && products.every((window) => window.unit === "percent")) {
+				return Math.min(100, Math.round(products.reduce((sum, window) => sum + window.used, 0) * 10) / 10);
+			}
+		}
+		function usagePresentation(usage) {
+			const { total, products } = splitUsageWindows(usage.windows);
+			const used = officialUsedPercent(usage);
+			const seed = total ?? products[0];
+			const syntheticTotal = total ?? (used === void 0 || seed === void 0 ? void 0 : {
+				id: "SuperGrok",
+				used,
+				limit: 100,
+				unit: "percent",
+				...seed.period === void 0 ? {} : { period: seed.period },
+				...seed.resetsAt === void 0 ? {} : { resetsAt: seed.resetsAt }
+			});
+			return {
+				total: syntheticTotal,
+				products
 			};
 		}
 		//#endregion
@@ -639,8 +793,8 @@ window.__ModuleLoader__.load({
 			cursor: "pointer"
 		};
 		/** Join connection status and model count: "已登录 · 8 个模型". */
-		function formatProviderSummary(status, modelsLabel) {
-			return status.replace(/[。.]$/u, "") + " · " + modelsLabel;
+		function formatProviderSummary(...parts) {
+			return parts.filter((part) => typeof part === "string" && part.length > 0).map((part) => part.replace(/[。.]$/u, "")).join(" · ");
 		}
 		/** Fixed-height collapsed header: mark, title, status · count, chevron. */
 		function ProviderCardHeader(props) {
@@ -952,10 +1106,10 @@ window.__ModuleLoader__.load({
 		//#region src/client/BrandMark.tsx
 		const SIZE = 18;
 		/** Same optical size as the other 18px provider marks; 1 unit = 1 device pixel. */
-		function BrandMark() {
+		function BrandMark({ size = SIZE } = {}) {
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("svg", {
-				width: SIZE,
-				height: SIZE,
+				width: size,
+				height: size,
 				viewBox: "0 0 18 18",
 				"aria-hidden": "true",
 				shapeRendering: "geometricPrecision",
@@ -1365,6 +1519,34 @@ window.__ModuleLoader__.load({
 			background: "var(--dsw-alias-button-primary-fill)",
 			color: "var(--dsw-alias-label-primary-foreground)"
 		};
+		const quietButtonStyle = {
+			...buttonStyle,
+			minHeight: 28,
+			padding: "4px 10px",
+			fontSize: 12
+		};
+		const accountListStyle = {
+			display: "flex",
+			flexDirection: "column",
+			gap: 8
+		};
+		const accountRowStyle = {
+			display: "flex",
+			alignItems: "center",
+			justifyContent: "space-between",
+			gap: 10,
+			border: "1px solid var(--dsw-alias-border-l2)",
+			borderRadius: 10,
+			padding: "10px 12px",
+			background: "var(--dsw-alias-bg-layer-1)"
+		};
+		const accountMetaStyle = {
+			display: "flex",
+			flexDirection: "column",
+			gap: 2,
+			minWidth: 0,
+			flex: 1
+		};
 		const inputStyle = {
 			boxSizing: "border-box",
 			width: "100%",
@@ -1484,6 +1666,60 @@ window.__ModuleLoader__.load({
 			if (email === void 0) return t("signedInNoEmail");
 			return t("signedInAs").replace("{email}", email);
 		}
+		function accountLabelOf(account) {
+			return account.email ?? account.id;
+		}
+		function authFromStatus(status, fallback) {
+			if (status.loggedIn) {
+				return {
+					kind: "signed-in",
+					...status.email === void 0 ? {} : { email: status.email },
+					...status.activeAccountId === void 0 ? {} : { activeAccountId: status.activeAccountId },
+					accounts: status.accounts ?? []
+				};
+			}
+			return {
+				kind: "signed-out",
+				...fallback === void 0 ? {} : { message: fallback },
+				accounts: status.accounts ?? []
+			};
+		}
+		function signedOutAuth(message, accounts) {
+			return {
+				kind: "signed-out",
+				...message === void 0 ? {} : { message },
+				accounts: accounts ?? []
+			};
+		}
+		function signingInAuth(current) {
+			const accounts = current?.accounts ?? [];
+			return {
+				kind: "signing-in",
+				...current?.email === void 0 ? {} : { email: current.email },
+				...current?.activeAccountId === void 0 ? {} : { activeAccountId: current.activeAccountId },
+				accounts
+			};
+		}
+		function restoreAuthAfterSignIn(current, message) {
+			const accounts = current.accounts ?? [];
+			const active = accounts.find((account) => account.active === true);
+			if (active === void 0) return signedOutAuth(message, accounts);
+			return {
+				kind: "signed-in",
+				...active.email === void 0 ? {} : { email: active.email },
+				activeAccountId: active.id,
+				accounts,
+				message
+			};
+		}
+		function applyAuthStatus(status, setAuth, extras) {
+			const next = authFromStatus(status);
+			setAuth(next);
+			if (next.kind !== "signed-in") {
+				extras?.onSignedOut?.();
+			}
+			return next;
+		}
 		function messageOf(error, fallback) {
 			return error instanceof Error && error.message.length > 0 ? error.message : fallback;
 		}
@@ -1547,7 +1783,8 @@ window.__ModuleLoader__.load({
 			const ratio = quota.limit > 0 ? quota.used / quota.limit : quota.used > 0 ? 1 : 0;
 			const percent = Math.round(ratio * 1e3) / 10;
 			const fill = Math.min(100, Math.max(0, percent));
-			const label = quota.period === void 0 || quota.resetsAt !== void 0 ? quota.id : quota.id + " (" + quota.period + ")";
+			const name = usageWindowLabelOf(quota.id, t);
+			const label = quota.period === void 0 || quota.resetsAt !== void 0 ? name : name + " (" + quota.period + ")";
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				style: {
 					display: "flex",
@@ -1598,9 +1835,337 @@ window.__ModuleLoader__.load({
 				atDays: t("usageResetAtDays")
 			};
 		}
+		/** Official grok.com composition: one SuperGrok pool with product slices. */
+		function UsageStackedBar({ total, products, t }) {
+			const used = total.used;
+			const label = usageWindowLabelOf(total.id, t);
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				style: {
+					display: "flex",
+					flexDirection: "column",
+					gap: 6
+				},
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						style: {
+							display: "flex",
+							alignItems: "baseline",
+							justifyContent: "space-between",
+							gap: 10
+						},
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							style: labelStyle,
+							children: label
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							style: hintStyle,
+							children: t("dockUsed").replace("{percent}", String(used))
+						})]
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						style: barTrackStyle,
+						role: "progressbar",
+						"aria-label": label,
+						"aria-valuemin": 0,
+						"aria-valuemax": 100,
+						"aria-valuenow": Math.round(used),
+						children: products.map((product, index) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							title: usageWindowLabelOf(product.id, t) + " " + String(product.used) + "%",
+							style: {
+								width: String(product.used) + "%",
+								height: "100%",
+								flex: "none",
+								background: "var(--dsw-alias-state-business-primary)",
+								opacity: String(Math.max(0.4, 1 - index * 0.28)),
+								transition: "width 200ms ease"
+							}
+						}, product.id + ":" + String(index)))
+					}),
+					products.length > 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+						style: hintStyle,
+						children: products.map((product) => usageWindowLabelOf(product.id, t) + " " + String(product.used) + "%").join(" · ")
+					}) : null,
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)(UsageResetAt, { label: resetLabelOf(total.resetsAt, usageResetCopy(t)) })
+				]
+			});
+		}
+		function renderUsageSnapshot(usage, t) {
+			const view = usagePresentation(usage);
+			if (view.total !== void 0 && view.products.length > 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(UsageStackedBar, {
+				total: view.total,
+				products: view.products,
+				t
+			});
+			if (view.total !== void 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(UsageBar, {
+				usedText: t("usageUsed"),
+				window: view.total,
+				t
+			});
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(react_jsx_runtime.Fragment, { children: usage.windows.map((window, index) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(UsageBar, {
+				usedText: t("usageUsed"),
+				window,
+				t
+			}, window.id + ":" + String(index))) });
+		}
+		const GROK_USAGE_FOCUS_DEBOUNCE_MS = 15e3;
+		const GROK_USAGE_WARN = 80;
+		const GROK_USAGE_ALERT = 95;
+		function accountUsageOf(accounts, accountId) {
+			if (!Array.isArray(accounts)) return void 0;
+			return accounts.find((entry) => entry.accountId === accountId || entry.email === accountId);
+		}
+		function usedPercentTone(used) {
+			if (used === void 0) return "var(--dsw-alias-label-tertiary)";
+			if (used >= GROK_USAGE_ALERT) return "var(--dsw-alias-state-error-primary)";
+			if (used >= GROK_USAGE_WARN) return "var(--dsw-alias-state-warn-primary)";
+			return "var(--dsw-alias-label-tertiary)";
+		}
+		function accountUsageCaption(entry, t) {
+			if (entry === void 0) return void 0;
+			if (entry.status === "ok") {
+				const used = officialUsedPercent(entry.usage);
+				if (used === void 0) return void 0;
+				return {
+					text: t("dockUsed").replace("{percent}", String(used)),
+					color: usedPercentTone(used)
+				};
+			}
+			if (entry.status === "unsupported") return {
+				text: t("usageUnsupported"),
+				color: "var(--dsw-alias-label-tertiary)"
+			};
+			if (entry.status === "error") return {
+				text: t("usageFailed"),
+				color: "var(--dsw-alias-state-error-primary)"
+			};
+		}
+		function renderAccountUsageBody(entry, t) {
+			if (entry.status === "ok") return renderUsageSnapshot(entry.usage, t);
+			if (entry.status === "unsupported") return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+				style: hintStyle,
+				children: t("usageUnsupported")
+			});
+			if (entry.status === "error") return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+				style: errorStyle$1,
+				children: entry.message
+			});
+			return null;
+		}
+		function renderAccountsUsage(accounts, t) {
+			if (accounts.length <= 1) {
+				const only = accounts[0];
+				return only === void 0 ? null : renderAccountUsageBody(only, t);
+			}
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				style: {
+					display: "flex",
+					flexDirection: "column",
+					gap: 14
+				},
+				children: accounts.map((entry) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					style: {
+						display: "flex",
+						flexDirection: "column",
+						gap: 8,
+						border: "1px solid var(--dsw-alias-border-l2)",
+						borderRadius: 10,
+						padding: "10px 12px",
+						background: "var(--dsw-alias-bg-layer-1)"
+					},
+					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						style: {
+							display: "flex",
+							alignItems: "baseline",
+							justifyContent: "space-between",
+							gap: 10
+						},
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							style: {
+								...labelStyle,
+								minWidth: 0,
+								overflow: "hidden",
+								textOverflow: "ellipsis"
+							},
+							children: entry.email ?? entry.accountId
+						}), entry.active ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							style: hintStyle,
+							children: t("accountActive")
+						}) : null]
+					}), renderAccountUsageBody(entry, t)]
+				}, entry.accountId))
+			});
+		}
+		const grokUsageDockCss = [
+			'[data-slot="conversation.composer.dock"]:has(> .grok-usage-dock){display:flex!important;flex-flow:row nowrap;justify-content:center;align-items:center;box-sizing:border-box;width:100%;max-width:var(--dsh-chat-content-width);min-width:0;padding:4px calc(var(--dsh-composer-side-clearance) + 16px) 0;overflow:hidden}',
+			'[data-slot="conversation.composer.dock"]:has(> .grok-usage-dock)>*{box-sizing:border-box;flex:0 1 auto;min-width:0;width:auto!important;max-width:none!important;margin:0!important;padding:0!important}',
+			".grok-usage-dock{display:inline-flex;align-items:center;flex:none;line-height:20px}",
+			'[data-slot="conversation.composer.dock"]:has(> .grok-usage-dock)>.grok-usage-dock{flex:none;overflow:visible}',
+			'.grok-usage-dock:not(:last-child):after{content:"|";color:var(--dsw-alias-separator-primary);margin:0 10px;font-size:12px;line-height:20px}',
+			".grok-usage{appearance:none;display:inline-flex;align-items:center;gap:6px;height:20px;padding:0 2px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:12px;line-height:20px;letter-spacing:.01em;white-space:nowrap;cursor:pointer;user-select:none}",
+			".grok-usage:hover,.grok-usage:focus-visible{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);outline:none}",
+			'.grok-usage-amount{color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}',
+			".grok-usage.is-warn .grok-usage-amount{color:var(--dsw-alias-state-warn-primary)}",
+			".grok-usage.is-alert .grok-usage-amount{color:var(--dsw-alias-state-error-primary)}",
+			".grok-usage-mark{display:block;opacity:.78;flex:none}",
+			".grok-usage:hover .grok-usage-mark,.grok-usage:focus-visible .grok-usage-mark{opacity:.95}",
+			".grok-usage.is-loading .grok-usage-mark{opacity:.95;animation:grok-usage-spin .8s linear infinite}",
+			"@media (prefers-reduced-motion:reduce){.grok-usage.is-loading .grok-usage-mark{animation:none}}",
+			"@keyframes grok-usage-spin{to{transform:rotate(360deg)}}",
+			"@media (max-width:640px){[data-slot=\"conversation.composer.dock\"]:has(> .grok-usage-dock){padding-left:12px;padding-right:12px}}"
+		].join("");
+		const grokUsageCssId = "dsh-grok-oauth/usage-dock.css";
+		if (typeof document !== "undefined") {
+			let grokUsageTag = document.querySelector("style[data-plugin-css=" + JSON.stringify(grokUsageCssId) + "]");
+			if (grokUsageTag === null) {
+				grokUsageTag = document.createElement("style");
+				grokUsageTag.dataset.plugin = "dsh-grok-oauth";
+				grokUsageTag.dataset.pluginCss = grokUsageCssId;
+				document.head.appendChild(grokUsageTag);
+			}
+			grokUsageTag.textContent = grokUsageDockCss;
+		}
+		let grokUsageFetch = null;
+		let grokUsageSnapshot = { status: "idle" };
+		let grokUsageLast = void 0;
+		let grokUsageLastFetchAt = 0;
+		let grokUsageInFlight = null;
+		const grokUsageListeners = new Set();
+		function grokUsageEmit() {
+			for (const listener of grokUsageListeners) listener();
+		}
+		function useGrokUsageStore() {
+			const [, bump] = (0, react.useState)(0);
+			(0, react.useEffect)(() => {
+				const onChange = () => bump((n) => n + 1);
+				grokUsageListeners.add(onChange);
+				return () => {
+					grokUsageListeners.delete(onChange);
+				};
+			}, []);
+			return grokUsageSnapshot;
+		}
+		function loadGrokUsage(force) {
+			if (grokUsageFetch === null) return Promise.resolve(grokUsageSnapshot);
+			if (grokUsageInFlight !== null) return grokUsageInFlight;
+			if (!force && grokUsageLastFetchAt > 0 && Date.now() - grokUsageLastFetchAt < GROK_USAGE_FOCUS_DEBOUNCE_MS && grokUsageSnapshot.status === "ready") {
+				return Promise.resolve(grokUsageSnapshot);
+			}
+			grokUsageSnapshot = {
+				status: "loading",
+				usage: grokUsageLast,
+				error: grokUsageSnapshot.status === "error" ? grokUsageSnapshot.error : void 0
+			};
+			grokUsageEmit();
+			grokUsageInFlight = grokUsageFetch().then((read) => {
+				grokUsageInFlight = null;
+				grokUsageLastFetchAt = Date.now();
+				if (read.status === "logged-out") {
+					grokUsageLast = void 0;
+					grokUsageSnapshot = { status: "logged-out" };
+				} else if (read.status === "unsupported") {
+					grokUsageSnapshot = {
+						status: "unsupported",
+						usage: grokUsageLast
+					};
+				} else {
+					grokUsageLast = read.usage;
+					grokUsageSnapshot = {
+						status: "ready",
+						usage: read.usage
+					};
+				}
+				grokUsageEmit();
+				return grokUsageSnapshot;
+			}, (error) => {
+				grokUsageInFlight = null;
+				grokUsageLastFetchAt = Date.now();
+				grokUsageSnapshot = {
+					status: "error",
+					usage: grokUsageLast,
+					error: error instanceof Error && error.message.length > 0 ? error.message : "usage failed"
+				};
+				grokUsageEmit();
+				return grokUsageSnapshot;
+			});
+			return grokUsageInFlight;
+		}
+		function grokUsageVisible() {
+			return typeof document === "undefined" || document.visibilityState !== "hidden";
+		}
+		function onGrokUsageVisibility() {
+			if (grokUsageVisible()) loadGrokUsage(false);
+		}
+		function onGrokUsageFocus() {
+			loadGrokUsage(false);
+		}
+		function grokUsageTitle(usage, t) {
+			const view = usagePresentation(usage);
+			const parts = [t("usageWindowSuperGrok")];
+			if (view.products.length > 0) {
+				parts.push(view.products.map((product) => usageWindowLabelOf(product.id, t) + " " + String(product.used) + "%").join(" · "));
+			}
+			const reset = resetLabelOf(view.total?.resetsAt, usageResetCopy(t));
+			if (reset !== void 0) parts.push(reset);
+			if (usage.fetchedAt) {
+				const stamp = formatUsageClock(new Date(usage.fetchedAt));
+				if (stamp) parts.push(t("usageUpdatedAt").replace("{time}", stamp));
+			}
+			parts.push(t("dockClick"));
+			return parts.join("\n");
+		}
+		function GrokUsageChip(props) {
+			const t = props.t;
+			const snapshot = useGrokUsageStore();
+			const running = typeof props.useSession === "function" ? props.useSession((s) => s.running) : false;
+			const prevRunning = (0, react.useRef)(running);
+			(0, react.useEffect)(() => {
+				if (prevRunning.current === true && running === false) loadGrokUsage(true);
+				prevRunning.current = running;
+			}, [running]);
+			const usage = snapshot.usage ?? grokUsageLast;
+			if (usage === void 0) return null;
+			const used = officialUsedPercent(usage);
+			if (used === void 0) return null;
+			const loading = snapshot.status === "loading" || snapshot.status === "idle";
+			const kind = used >= GROK_USAGE_ALERT ? "alert" : used >= GROK_USAGE_WARN ? "warn" : "ready";
+			const className = [
+				"grok-usage",
+				loading ? "is-loading" : "",
+				kind === "warn" ? "is-warn" : "",
+				kind === "alert" ? "is-alert" : ""
+			].filter(Boolean).join(" ");
+			const amount = t("dockUsed").replace("{percent}", String(used));
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				className: "grok-usage-dock",
+				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className,
+					title: grokUsageTitle(usage, t),
+					"aria-label": amount + "，" + t("dockClick"),
+					"aria-busy": loading || void 0,
+					onMouseDown: (event) => {
+						event.preventDefault();
+					},
+					onClick: (event) => {
+						event.preventDefault();
+						event.stopPropagation();
+						loadGrokUsage(true);
+					},
+					children: [
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							className: "grok-usage-mark",
+							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(BrandMark, { size: 14 })
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							className: "grok-usage-amount",
+							children: amount
+						})
+					]
+				})
+			});
+		}
 		/** Render the single-package Grok contribution under Plugin configuration. */
 		function GrokPluginCard(props) {
-			const { t, startAuth, completeAuth, readAuthStatus, logout, fetchUsage, fetchModels } = props;
+			const { t, startAuth, completeAuth, readAuthStatus, logout, switchAccount, removeAccount, fetchUsage, fetchAllUsage, fetchModels } = props;
 			const snapshot = props.useGrokSettings((value) => value);
 			const [open, setOpen] = (0, react.useState)(false);
 			const initial = (0, react.useMemo)(() => snapshot.value === void 0 ? void 0 : snapshot.value.models.map(modelDraftOf), [snapshot.value]);
@@ -1611,6 +2176,7 @@ window.__ModuleLoader__.load({
 			const [pasteCode, setPasteCode] = (0, react.useState)("");
 			const [usage, setUsage] = (0, react.useState)({ status: "idle" });
 			const [lastUsage, setLastUsage] = (0, react.useState)(void 0);
+			const [lastAccounts, setLastAccounts] = (0, react.useState)(void 0);
 			const [usageUpdatedAt, setUsageUpdatedAt] = (0, react.useState)(void 0);
 			const [enableImageGen, setEnableImageGen] = (0, react.useState)(snapshot.value?.enableImageGen === true);
 			const [sourceEnableImageGen, setSourceEnableImageGen] = (0, react.useState)(snapshot.value?.enableImageGen === true);
@@ -1655,53 +2221,52 @@ window.__ModuleLoader__.load({
 				props.closeModelPicker();
 			}, [props.closeModelPicker]);
 			const loadUsage = async () => {
-				setUsage({ status: "loading" });
+				setUsage((current) => ({
+					status: "loading",
+					...current.accounts === void 0 ? {} : { accounts: current.accounts }
+				}));
 				try {
-					const read = await fetchUsage();
+					const read = await fetchAllUsage();
 					if (read.status === "logged-out") {
-						setAuth({ kind: "signed-out" });
+						setAuth((current) => signedOutAuth(void 0, current.accounts));
+						setLastUsage(void 0);
+						setLastAccounts(void 0);
+						setUsageUpdatedAt(void 0);
 						setUsage({ status: "idle" });
 						return;
 					}
-					if (read.status === "unsupported") {
-						setUsage({ status: "unsupported" });
-						return;
-					}
-					setLastUsage(read.usage);
+					const active = read.accounts.find((entry) => entry.active === true && entry.status === "ok");
+					setLastAccounts(read.accounts);
+					setLastUsage(active?.usage);
 					setUsageUpdatedAt(/* @__PURE__ */ new Date());
 					setUsage({
 						status: "ready",
-						usage: read.usage
+						accounts: read.accounts
 					});
 				} catch (error) {
-					setUsage({
+					setUsage((current) => ({
 						status: "error",
-						message: messageOf(error, t("usageFailed"))
-					});
+						message: messageOf(error, t("usageFailed")),
+						...current.accounts === void 0 ? {} : { accounts: current.accounts }
+					}));
 				}
+			};
+			const clearUsage = () => {
+				setLastUsage(void 0);
+				setLastAccounts(void 0);
+				setUsageUpdatedAt(void 0);
+				setUsage({ status: "idle" });
 			};
 			(0, react.useEffect)(() => {
 				let cancelled = false;
 				readAuthStatus().then((status) => {
 					if (cancelled) return;
-					if (status.loggedIn) {
-						setAuth({
-							kind: "signed-in",
-							...status.email === void 0 ? {} : { email: status.email }
-						});
-						return;
-					}
-					setAuth({ kind: "signed-out" });
-					setLastUsage(void 0);
-					setUsageUpdatedAt(void 0);
-					setUsage({ status: "idle" });
+					const next = applyAuthStatus(status, setAuth);
+					if (next.kind !== "signed-in") clearUsage();
 				}).catch(() => {
 					if (!cancelled) {
-						setAuth({
-							kind: "signed-out",
-							message: t("statusFailed")
-						});
-						setUsage({ status: "idle" });
+						setAuth(signedOutAuth(t("statusFailed")));
+						clearUsage();
 					}
 				});
 				return () => {
@@ -1709,10 +2274,10 @@ window.__ModuleLoader__.load({
 				};
 			}, [readAuthStatus, t]);
 			(0, react.useEffect)(() => {
-				if (!open || auth.kind !== "signed-in") return;
+				if (!open || (auth.kind !== "signed-in" && auth.kind !== "signing-in") || (auth.kind === "signing-in" && (auth.activeAccountId === void 0))) return;
 				setUsage({ status: "loading" });
 				loadUsage();
-			}, [open, auth.kind]);
+			}, [open, auth.kind, auth.activeAccountId]);
 			const patchDraft = (models) => {
 				setDraft(models);
 				setFailure(void 0);
@@ -1761,57 +2326,114 @@ window.__ModuleLoader__.load({
 						// The sign-in attempt below will surface the network error.
 					}
 				}
-				setAuth({ kind: "signing-in" });
+				setAuth((current) => signingInAuth(current));
 				setPasteCode("");
-				setUsage({ status: "idle" });
+				if ((auth.accounts?.length ?? 0) === 0) setUsage({ status: "idle" });
 				try {
 					const started = await startAuth();
 					if (!started.ok) {
-						setAuth({
-							kind: "signed-out",
-							message: started.message || t("signInFailed")
-						});
+						const message = started.message || t("signInFailed");
+						setFailure(message);
+						setAuth((current) => restoreAuthAfterSignIn(current, message));
 						return;
 					}
 					const status = await readAuthStatus();
-					setAuth(status.loggedIn ? {
-						kind: "signed-in",
-						...status.email === void 0 ? {} : { email: status.email }
-					} : {
-						kind: "signed-out",
-						message: t("signInFailed")
-					});
+					const next = applyAuthStatus(status, setAuth, { onSignedOut: clearUsage });
+					setFailure(void 0);
+					if (started.reused === true) setNotice(t("accountReused").replace("{email}", started.email ?? next.email ?? ""));
+					else if (next.kind === "signed-in") setNotice(t("accountAdded").replace("{email}", next.email ?? ""));
+					loadGrokUsage(true);
 				} catch {
-					setAuth({
-						kind: "signed-out",
-						message: t("signInFailed")
-					});
+					const message = t("signInFailed");
+					setFailure(message);
+					setAuth((current) => restoreAuthAfterSignIn(current, message));
 				}
 			};
 			const onPasteCode = async () => {
 				const code = pasteCode.trim();
 				if (code.length === 0) {
-					setAuth({ kind: "signing-in" });
+					setAuth((current) => signingInAuth(current));
 					return;
 				}
 				try {
-					if (!(await completeAuth(code)).ok) setAuth({ kind: "signing-in" });
+					if (!(await completeAuth(code)).ok) setAuth((current) => signingInAuth(current));
 				} catch {
-					setAuth({ kind: "signing-in" });
+					setAuth((current) => signingInAuth(current));
+				}
+			};
+			const onSwitchAccount = async (accountId) => {
+				try {
+					const result = await switchAccount(accountId);
+					if (!result.ok) {
+						setFailure(result.message || t("switchFailed"));
+						return;
+					}
+					const status = result.status ?? await readAuthStatus();
+					applyAuthStatus(status, setAuth, { onSignedOut: clearUsage });
+					setNotice(t("accountSwitched").replace("{email}", status.email ?? ""));
+					setLastAccounts((current) => current === void 0 ? current : current.map((entry) => ({
+						...entry,
+						active: entry.accountId === accountId
+					})));
+					setUsage((current) => {
+						const accounts = current.accounts ?? lastAccounts;
+						if (accounts === void 0) return { status: "loading" };
+						return {
+							status: "ready",
+							accounts: accounts.map((entry) => ({
+								...entry,
+								active: entry.accountId === accountId
+							}))
+						};
+					});
+					loadGrokUsage(true);
+					await loadUsage();
+				} catch (error) {
+					setFailure(messageOf(error, t("switchFailed")));
+				}
+			};
+			const onRemoveAccount = async (accountId) => {
+				try {
+					const result = await removeAccount(accountId);
+					if (!result.ok) {
+						setFailure(result.message || t("removeFailed"));
+						return;
+					}
+					const status = result.status ?? await readAuthStatus();
+					const next = applyAuthStatus(status, setAuth, { onSignedOut: clearUsage });
+					if (next.kind === "signed-in") {
+						setLastUsage(void 0);
+						setUsageUpdatedAt(void 0);
+						setUsage({ status: "loading" });
+						await loadUsage();
+						loadGrokUsage(true);
+					} else {
+						clearUsage();
+						loadGrokUsage(true);
+					}
+				} catch (error) {
+					setFailure(messageOf(error, t("removeFailed")));
 				}
 			};
 			const onSignOut = async () => {
+				const accountId = auth.activeAccountId ?? auth.accounts?.find((account) => account.active)?.id;
 				try {
-					await logout();
-					setAuth({ kind: "signed-out" });
-					setLastUsage(void 0);
-					setUsageUpdatedAt(void 0);
-					setUsage({ status: "idle" });
+					const result = await logout(accountId);
+					if (result?.ok === false) {
+						setFailure(result.message || t("signOutFailed"));
+						return;
+					}
+					const status = result?.status ?? await readAuthStatus();
+					const next = applyAuthStatus(status, setAuth, { onSignedOut: clearUsage });
+					if (next.kind === "signed-in") {
+						setLastUsage(void 0);
+						setUsageUpdatedAt(void 0);
+						setUsage({ status: "loading" });
+						await loadUsage();
+					} else clearUsage();
+					loadGrokUsage(true);
 				} catch {
-					setAuth((current) => current.kind === "signed-in" ? current : {
-						kind: "signed-out",
-						message: t("signOutFailed")
-					});
+					setAuth((current) => current.kind === "signed-in" ? current : signedOutAuth(t("signOutFailed"), current.accounts));
 				}
 			};
 			const chooseFromAccount = async () => {
@@ -1898,9 +2520,12 @@ window.__ModuleLoader__.load({
 					setBusy(false);
 				}
 			};
+			const savedAccounts = auth.accounts ?? [];
+			const usageAccounts = usage.accounts ?? lastAccounts;
+			const accountCount = savedAccounts.length;
 			const statusLabel = signingIn ? t("signingIn") : auth.kind === "signed-in" ? formatSignedIn(t, auth.email) : auth.message ?? t("signedOut");
 			const modelCount = draft?.length ?? 0;
-			const headerSummary = formatProviderSummary(auth.kind === "signed-in" ? t("summaryOn") : t("summaryOff"), t("summaryModels").replace("{count}", String(modelCount)));
+			const headerSummary = formatProviderSummary(auth.kind === "signed-in" || accountCount > 0 ? t("summaryOn") : t("summaryOff"), t("summaryAccounts").replace("{count}", String(accountCount)), t("summaryModels").replace("{count}", String(modelCount)));
 			if (snapshot.status === "unavailable") return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("li", {
 				style: cardStyle,
 				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
@@ -1977,7 +2602,7 @@ window.__ModuleLoader__.load({
 						}),
 						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("section", {
 							style: sectionStyle,
-							"aria-label": statusLabel,
+							"aria-label": t("accounts"),
 							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(AuthToolbar, {
 								status: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
 									style: {
@@ -1986,23 +2611,75 @@ window.__ModuleLoader__.load({
 									},
 									children: statusLabel
 								}),
-								action: auth.kind === "signed-in" ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-									type: "button",
-									style: buttonStyle,
-									disabled: signingIn,
-									onClick: () => {
-										onSignOut();
-									},
-									children: t("signOut")
-								}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+								action: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 									type: "button",
 									style: buttonStyle,
 									disabled: signingIn,
 									onClick: () => {
 										onSignIn();
 									},
-									children: t("signIn")
+									children: t(accountCount > 0 ? "addAccount" : "signIn")
 								})
+							}), savedAccounts.length > 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+								style: accountListStyle,
+								children: savedAccounts.map((account) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									style: accountRowStyle,
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+										style: accountMetaStyle,
+										children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+											style: {
+												...statusStyle$1,
+												margin: 0,
+												color: "var(--dsw-alias-label-primary)"
+											},
+											children: accountLabelOf(account)
+										}), (() => {
+											const caption = accountUsageCaption(accountUsageOf(usageAccounts, account.id), t);
+											if (!account.active && caption === void 0) return null;
+											return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+												style: {
+													...hintStyle,
+													display: "flex",
+													flexWrap: "wrap",
+													gap: 6
+												},
+												children: [account.active ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("accountActive") }) : null, caption === void 0 ? null : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+													style: { color: caption.color },
+													children: caption.text
+												})]
+											});
+										})()]
+									}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+										style: {
+											display: "flex",
+											gap: 8,
+											flex: "none"
+										},
+										children: [account.active ? null : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+											type: "button",
+											style: quietButtonStyle,
+											disabled: signingIn,
+											onClick: () => {
+												onSwitchAccount(account.id);
+											},
+											children: t("useAccount")
+										}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+											type: "button",
+											style: quietButtonStyle,
+											disabled: signingIn,
+											onClick: () => {
+												onRemoveAccount(account.id);
+											},
+											children: t("removeAccount")
+										})]
+									})]
+								}, account.id))
+							}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+								style: hintStyle,
+								children: t("accountsEmpty")
+							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+								style: hintStyle,
+								children: t("accountsHelp")
 							}), auth.kind === "signing-in" ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 								style: {
 									display: "flex",
@@ -2042,7 +2719,7 @@ window.__ModuleLoader__.load({
 								]
 							}) : null]
 						}),
-						auth.kind === "signed-in" ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("section", {
+						(auth.kind === "signed-in" || auth.activeAccountId !== void 0) ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("section", {
 							style: sectionStyle,
 							"aria-label": t("usage"),
 							children: [
@@ -2058,13 +2735,13 @@ window.__ModuleLoader__.load({
 									}
 								}),
 								(() => {
-									if (usage.status === "loading" || usage.status === "idle") return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(UsageSkeleton, { rows: lastUsage?.windows.length ?? 1 });
-									const bars = usage.status === "ready" ? usage.usage : lastUsage;
-									if (bars !== void 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(react_jsx_runtime.Fragment, { children: bars.windows.map((window, index) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(UsageBar, {
-										usedText: t("usageUsed"),
-										window,
-										t
-									}, window.id + ":" + String(index))) });
+									if (usageAccounts !== void 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, {
+										children: [renderAccountsUsage(usageAccounts, t), usage.status === "error" ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+											style: errorStyle$1,
+											children: usage.message
+										}) : null]
+									});
+									if (usage.status === "loading" || usage.status === "idle") return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(UsageSkeleton, { rows: usageAccounts?.length > 1 ? 2 : 1 });
 									if (usage.status === "unsupported") return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
 										style: hintStyle,
 										children: t("usageUnsupported")
@@ -2682,14 +3359,27 @@ window.__ModuleLoader__.load({
 		/** English Grok configuration copy. */
 		const en = {
 			title: "Grok",
-			description: "Sign in with an xAI subscription. This plugin does not use a console API key.",
+			description: "Sign in with an xAI subscription. Save more than one Google login and switch when a SuperGrok quota is used up. This plugin does not use a console API key.",
 			expand: "Expand settings",
 			collapse: "Collapse settings",
 			signedOut: "Not signed in.",
 			signedInAs: "Signed in as {email}.",
 			signedInNoEmail: "Signed in.",
 			signIn: "Sign in with xAI",
+			addAccount: "Add account",
 			signOut: "Sign out",
+			accounts: "Saved accounts",
+			accountsEmpty: "No Grok accounts saved yet.",
+			accountsHelp: "Each saved login shows its SuperGrok quota. Chat, Imagine, and the usage chip always use the active account.",
+			accountActive: "Active",
+			useAccount: "Use",
+			removeAccount: "Remove",
+			accountAdded: "Saved {email} and made it active.",
+			accountReused: "That Google login is already {email}. Choose a different account in the browser.",
+			accountSwitched: "Now using {email}.",
+			switchFailed: "Could not switch Grok accounts.",
+			removeFailed: "Could not remove that Grok account.",
+			summaryAccounts: "{count} accounts",
 			signingIn: "Waiting for browser sign-in…",
 			pasteCode: "If the page asks you to copy a code into Grok Build, paste it here.",
 			pasteCodeLabel: "Sign-in code",
@@ -2744,6 +3434,12 @@ window.__ModuleLoader__.load({
 			usageUpdatedAt: "Updated {time}",
 			usageResetAt: "Resets {time}",
 			usageResetAtDays: "Usage limits reset on {date} ({count} days left)",
+			usageWindowSuperGrok: "Weekly SuperGrok limit",
+			usageWindowGrokBuild: "Grok Build",
+			usageWindowGrokImagine: "Imagine",
+			usageWindowGrokAppBuilder: "App Builder",
+			dockUsed: "{percent}% used",
+			dockClick: "Click to refresh",
 			capabilities: "Capabilities",
 			enableImageGen: "Enable grok_image_gen tool",
 			enableImageGenHelp: "Lets any conversation model draw with Grok Imagine using this SuperGrok login. Distinct from Codex codex_generate_image.",
@@ -2758,14 +3454,27 @@ window.__ModuleLoader__.load({
 		/** Chinese Grok configuration copy. */
 		const zh = {
 			title: "Grok",
-			description: "使用 xAI 订阅登录。本插件不使用 console API key。",
+			description: "使用 xAI 订阅登录，可保存多个 Google 账号并在额度用完后切换。本插件不使用 console API key。",
 			expand: "展开设置",
 			collapse: "折叠设置",
 			signedOut: "尚未登录。",
 			signedInAs: "已登录为 {email}。",
 			signedInNoEmail: "已登录。",
 			signIn: "用 xAI 登录",
+			addAccount: "添加账号",
 			signOut: "退出登录",
+			accounts: "已保存账号",
+			accountsEmpty: "还没有保存 Grok 账号。",
+			accountsHelp: "每个已保存账号都会显示自己的额度，不用先切换。对话、Imagine 和底部额度芯片始终使用当前账号。",
+			accountActive: "当前使用",
+			useAccount: "使用",
+			removeAccount: "移除",
+			accountAdded: "已保存 {email}，并切换为当前账号。",
+			accountReused: "浏览器还是选了 {email}。请换成另一个 Google 账号后再试。",
+			accountSwitched: "已切换到 {email}。",
+			switchFailed: "无法切换 Grok 账号。",
+			removeFailed: "无法移除这个 Grok 账号。",
+			summaryAccounts: "{count} 个账号",
 			signingIn: "正在等待浏览器登录…",
 			pasteCode: "如果页面要你把代码复制到 Grok Build，把它贴到这里。",
 			pasteCodeLabel: "登录代码",
@@ -2820,6 +3529,12 @@ window.__ModuleLoader__.load({
 			usageUpdatedAt: "{time} 已更新",
 			usageResetAt: "重置时间：{time}",
 			usageResetAtDays: "重置时间：{date}（还剩 {count} 天）",
+			usageWindowSuperGrok: "每周 SuperGrok 限额",
+			usageWindowGrokBuild: "Grok Build",
+			usageWindowGrokImagine: "Imagine",
+			usageWindowGrokAppBuilder: "App Builder",
+			dockUsed: "{percent}% 已使用",
+			dockClick: "点击刷新",
 			capabilities: "能力",
 			enableImageGen: "启用 grok_image_gen 工具",
 			enableImageGenHelp: "让任意会话模型用本卡的 SuperGrok 登录调用 Grok Imagine 生图。与 Codex 的 codex_generate_image 不同名。",
@@ -2893,10 +3608,33 @@ window.__ModuleLoader__.load({
 				if (decoded === void 0) throw new Error(t("statusFailed"));
 				return decoded;
 			};
-			const logout = async () => {
-				const result = await rpc.call(GROK_RPC_CHANNEL, GROK_AUTH_LOGOUT_ENDPOINT, {});
+			const decodeAccountMutation = (value, fallback) => {
+				const decoded = decodeGrokAuthLogoutReply(value);
+				if (decoded === void 0) throw new Error(t(fallback));
+				return decoded;
+			};
+			const logout = async (accountId) => {
+				const result = await rpc.call(GROK_RPC_CHANNEL, GROK_AUTH_LOGOUT_ENDPOINT, accountId === void 0 ? {} : { accountId });
 				if (!result.ok) throw new Error(result.error.message);
-				if (decodeGrokAuthLogoutReply(result.value) === void 0) throw new Error(t("signOutFailed"));
+				return decodeAccountMutation(result.value, "signOutFailed");
+			};
+			const switchAccount = async (accountId) => {
+				const result = await rpc.call(GROK_RPC_CHANNEL, GROK_AUTH_SWITCH_ENDPOINT, { accountId });
+				if (!result.ok) return {
+					ok: false,
+					retryable: true,
+					message: result.error.message
+				};
+				return decodeAccountMutation(result.value, "switchFailed");
+			};
+			const removeAccount = async (accountId) => {
+				const result = await rpc.call(GROK_RPC_CHANNEL, GROK_AUTH_REMOVE_ENDPOINT, { accountId });
+				if (!result.ok) return {
+					ok: false,
+					retryable: true,
+					message: result.error.message
+				};
+				return decodeAccountMutation(result.value, "removeFailed");
 			};
 			const fetchModels = async () => {
 				const result = await rpc.call(GROK_RPC_CHANNEL, GROK_MODELS_ENDPOINT, {});
@@ -2912,6 +3650,44 @@ window.__ModuleLoader__.load({
 				if (decoded === void 0) throw new Error(t("usageFailed"));
 				return decoded;
 			};
+			const fetchAllUsage = async () => {
+				const result = await rpc.call(GROK_RPC_CHANNEL, GROK_USAGE_ALL_ENDPOINT, {});
+				if (result.ok) {
+					const decoded = decodeGrokAccountsUsageReply(result.value);
+					if (decoded !== void 0) return decoded;
+					throw new Error(t("usageFailed"));
+				}
+				const message = result.error?.message;
+				if (typeof message === "string" && message.includes("unknown Grok endpoint")) {
+					const single = await fetchUsage();
+					if (single.status === "logged-out") return {
+						status: "logged-out",
+						accounts: []
+					};
+					if (single.status === "unsupported") return {
+						status: "ok",
+						accounts: [{
+							accountId: "active",
+							active: true,
+							status: "unsupported"
+						}]
+					};
+					return {
+						status: "ok",
+						accounts: [{
+							accountId: "active",
+							active: true,
+							status: "ok",
+							usage: single.usage
+						}]
+					};
+				}
+				throw new Error(typeof message === "string" && message.length > 0 ? message : t("usageFailed"));
+			};
+			grokUsageFetch = fetchUsage;
+			loadGrokUsage(true);
+			if (typeof document !== "undefined") document.addEventListener("visibilitychange", onGrokUsageVisibility);
+			if (typeof window !== "undefined") window.addEventListener("focus", onGrokUsageFocus);
 			const saveConfiguration = async (settings) => {
 				const snapshot = scope.getSnapshot();
 				if (snapshot.revision === void 0) throw new Error(t("requestFailed"));
@@ -2946,7 +3722,10 @@ window.__ModuleLoader__.load({
 				completeAuth,
 				readAuthStatus,
 				logout,
+				switchAccount,
+				removeAccount,
 				fetchUsage,
+				fetchAllUsage,
 				fetchModels,
 				saveConfiguration,
 				beginModelPicker: (initiallyPicked, onAdopt) => {
@@ -2998,6 +3777,19 @@ window.__ModuleLoader__.load({
 				locale: localeNamespace,
 				inject: grokCardInject
 			}, GrokPluginCard));
+			ctx.slots.inject("conversation.composer.dock", () => ctx.slots.register({
+				name: "conversation.composer.dock",
+				id: "dsh-grok-oauth-usage",
+				order: -9,
+				label: () => t("usageWindowSuperGrok"),
+				inject: () => ({ t })
+			}, GrokUsageChip));
+			ctx.effect(() => () => {
+				if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onGrokUsageVisibility);
+				if (typeof window !== "undefined") window.removeEventListener("focus", onGrokUsageFocus);
+				grokUsageListeners.clear();
+				grokUsageFetch = null;
+			}, "dsh-grok-oauth usage dock");
 		}
 		//#endregion
 		exports.apply = apply;

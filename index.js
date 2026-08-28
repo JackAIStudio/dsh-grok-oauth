@@ -30,12 +30,20 @@ const GROK_RPC_CHANNEL = "/grok";
 const GROK_AUTH_START_ENDPOINT = "auth/start";
 /** Secret-free login snapshot. */
 const GROK_AUTH_STATUS_ENDPOINT = "auth/status";
-/** Delete the Host session file. */
+/** Remove one saved account, or the active account when no id is sent. */
 const GROK_AUTH_LOGOUT_ENDPOINT = "auth/logout";
 /** Deliver a Grok Build paste-code into the in-flight PKCE exchange. */
 const GROK_AUTH_COMPLETE_ENDPOINT = "auth/complete";
+/** Switch the active saved account. */
+const GROK_AUTH_SWITCH_ENDPOINT = "auth/switch";
+/** Remove one saved account by id. */
+const GROK_AUTH_REMOVE_ENDPOINT = "auth/remove";
 /** Secret-free subscription-usage snapshot inside {@link GROK_RPC_CHANNEL}. */
 const GROK_USAGE_ENDPOINT = "usage/read";
+/** Secret-free usage snapshot for every saved account, without switching the active one. */
+const GROK_USAGE_ALL_ENDPOINT = "usage/readAll";
+/** Loopback HTTP snapshot of usage/read for host-local consumers such as dsh-mobile-plus. */
+const GROK_USAGE_HTTP_PATH = "/dsh-grok-oauth/usage";
 /**
 * Offline fallback when the account catalog cannot be read. Live ids come
 * from GET /v1/models-v2 after sign-in.
@@ -156,6 +164,30 @@ function decodeGrokEmptyRequest(value) {
 	if (!isRecord$9(value) || hasTokenFields(value)) return void 0;
 	return {};
 }
+function decodeGrokAccountIdRequest(value) {
+	if (value === void 0 || value === null) return {};
+	if (!isRecord$9(value) || hasTokenFields(value)) return void 0;
+	const accountId = value["accountId"] ?? value["id"];
+	if (accountId === void 0) return {};
+	if (typeof accountId !== "string" || accountId.trim().length === 0) return void 0;
+	return { accountId: accountId.trim() };
+}
+function decodeGrokAuthAccountView(value) {
+	if (!isRecord$9(value) || hasTokenFields(value)) return void 0;
+	const id = value["id"];
+	const email = value["email"];
+	const expiresAt = value["expiresAt"];
+	const active = value["active"];
+	if (typeof id !== "string" || id.length === 0) return void 0;
+	if (!optionalNonEmptyString(email) || !optionalNonEmptyString(expiresAt)) return void 0;
+	if (active !== void 0 && typeof active !== "boolean") return void 0;
+	return {
+		id,
+		...email === void 0 ? {} : { email },
+		...expiresAt === void 0 ? {} : { expiresAt },
+		active: active === true
+	};
+}
 /**
 * Narrow the Host start-login reply before the card updates.
 * @param value - untrusted RPC result value.
@@ -163,7 +195,19 @@ function decodeGrokEmptyRequest(value) {
 */
 function decodeGrokAuthStartReply(value) {
 	if (!isRecord$9(value) || hasTokenFields(value) || typeof value["ok"] !== "boolean") return void 0;
-	if (value["ok"] === true) return { ok: true };
+	if (value["ok"] === true) {
+		const reused = value["reused"];
+		const email = value["email"];
+		const accountId = value["accountId"];
+		if (reused !== void 0 && typeof reused !== "boolean") return void 0;
+		if (!optionalNonEmptyString(email) || !optionalNonEmptyString(accountId)) return void 0;
+		return {
+			ok: true,
+			...reused === true ? { reused: true } : {},
+			...email === void 0 ? {} : { email },
+			...accountId === void 0 ? {} : { accountId }
+		};
+	}
 	if (value["retryable"] !== true || typeof value["message"] !== "string" || value["message"].length === 0) return;
 	return {
 		ok: false,
@@ -180,11 +224,24 @@ function decodeGrokAuthStatus(value) {
 	if (!isRecord$9(value) || hasTokenFields(value) || typeof value["loggedIn"] !== "boolean") return void 0;
 	const email = value["email"];
 	const expiresAt = value["expiresAt"];
-	if (!optionalNonEmptyString(email) || !optionalNonEmptyString(expiresAt)) return void 0;
+	const activeAccountId = value["activeAccountId"];
+	if (!optionalNonEmptyString(email) || !optionalNonEmptyString(expiresAt) || !optionalNonEmptyString(activeAccountId)) return void 0;
+	const accounts = [];
+	const accountsValue = value["accounts"];
+	if (accountsValue !== void 0) {
+		if (!Array.isArray(accountsValue)) return void 0;
+		for (const entry of accountsValue) {
+			const account = decodeGrokAuthAccountView(entry);
+			if (account === void 0) return void 0;
+			accounts.push(account);
+		}
+	}
 	return {
 		loggedIn: value["loggedIn"],
 		...email === void 0 ? {} : { email },
-		...expiresAt === void 0 ? {} : { expiresAt }
+		...expiresAt === void 0 ? {} : { expiresAt },
+		...activeAccountId === void 0 ? {} : { activeAccountId },
+		accounts
 	};
 }
 /**
@@ -193,8 +250,21 @@ function decodeGrokAuthStatus(value) {
 * @returns the validated reply, or undefined when it is malformed or carries secrets.
 */
 function decodeGrokAuthLogoutReply(value) {
-	if (!isRecord$9(value) || hasTokenFields(value) || value["ok"] !== true) return void 0;
-	return { ok: true };
+	if (!isRecord$9(value) || hasTokenFields(value) || typeof value["ok"] !== "boolean") return void 0;
+	if (value["ok"] !== true) {
+		if (value["retryable"] !== true || typeof value["message"] !== "string" || value["message"].length === 0) return;
+		return {
+			ok: false,
+			retryable: true,
+			message: value["message"]
+		};
+	}
+	const status = value["status"] === void 0 ? void 0 : decodeGrokAuthStatus(value["status"]);
+	if (value["status"] !== void 0 && status === void 0) return void 0;
+	return {
+		ok: true,
+		...status === void 0 ? {} : { status }
+	};
 }
 function decodeGrokUsageWindow(value) {
 	if (!isRecord$9(value) || hasTokenFields(value)) return void 0;
@@ -358,6 +428,64 @@ function decodeGrokUsageReply(value) {
 		usage
 	};
 }
+function decodeGrokAccountUsageView(value) {
+	if (!isRecord$9(value) || hasTokenFields(value)) return void 0;
+	const accountId = value["accountId"];
+	const email = value["email"];
+	const active = value["active"];
+	const status = value["status"];
+	if (typeof accountId !== "string" || accountId.length === 0) return void 0;
+	if (!optionalNonEmptyString(email)) return void 0;
+	if (typeof active !== "boolean") return void 0;
+	if (status === "unsupported") return {
+		accountId,
+		...email === void 0 ? {} : { email },
+		active,
+		status: "unsupported"
+	};
+	if (status === "error") {
+		const message = value["message"];
+		if (typeof message !== "string" || message.length === 0) return void 0;
+		return {
+			accountId,
+			...email === void 0 ? {} : { email },
+			active,
+			status: "error",
+			message
+		};
+	}
+	if (status !== "ok") return void 0;
+	const usage = decodeGrokUsageView(value["usage"]);
+	return usage === void 0 ? void 0 : {
+		accountId,
+		...email === void 0 ? {} : { email },
+		active,
+		status: "ok",
+		usage
+	};
+}
+/**
+* Narrow the all-accounts usage reply. Token-shaped fields fail closed.
+* @param value - untrusted RPC result value.
+*/
+function decodeGrokAccountsUsageReply(value) {
+	if (!isRecord$9(value) || hasTokenFields(value)) return void 0;
+	if (value["status"] === "logged-out") return {
+		status: "logged-out",
+		accounts: []
+	};
+	if (value["status"] !== "ok" || !Array.isArray(value["accounts"])) return void 0;
+	const accounts = [];
+	for (const entry of value["accounts"]) {
+		const decoded = decodeGrokAccountUsageView(entry);
+		if (decoded === void 0) return void 0;
+		accounts.push(decoded);
+	}
+	return {
+		status: "ok",
+		accounts
+	};
+}
 //#endregion
 //#region lib/types/reasoning.js
 /**
@@ -473,9 +601,15 @@ function applyGrokReasoningWire(payload, model) {
 /**
 * Host-only Grok OAuth session file. Tokens never leave this module through
 * the RPC contract; the browser only sees {@link statusFromSession}.
+*
+* v1 was a single session object. v2 stores every saved SuperGrok login and
+* one active account. Chat, Imagine, and the usage chip always use the
+* active account; switching never mixes tokens mid-request. The settings card
+* can read every saved account's billing snapshot without switching.
 */
 /** File name under `$DSH_HOME`. Never `~/.grok/auth.json`. */
 const GROK_SESSION_FILENAME = "grok-oauth.json";
+const GROK_SESSION_VERSION = 2;
 function isRecord$7(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -501,10 +635,43 @@ function resolveGrokSessionPath(ctx) {
 function sessionPathForHome(dshHome) {
 	return join(dshHome, GROK_SESSION_FILENAME);
 }
-/**
-* Narrow a session document. Rejects missing token or expiry fields.
-* @param value - parsed JSON.
-*/
+function accountKeyOf(session) {
+	if (typeof session.userId === "string" && session.userId.length > 0) return session.userId;
+	if (typeof session.email === "string" && session.email.length > 0) return session.email.toLowerCase();
+	return void 0;
+}
+function publicAccountId(session) {
+	return accountKeyOf(session) ?? session.expiresAt;
+}
+function sameAccount(left, right) {
+	const leftKey = accountKeyOf(left);
+	const rightKey = accountKeyOf(right);
+	return leftKey !== void 0 && rightKey !== void 0 && leftKey === rightKey;
+}
+function cloneSession(session) {
+	return {
+		accessToken: session.accessToken,
+		refreshToken: session.refreshToken,
+		expiresAt: session.expiresAt,
+		...session.email === void 0 ? {} : { email: session.email },
+		...session.userId === void 0 ? {} : { userId: session.userId }
+	};
+}
+function emptyStore() {
+	return {
+		version: GROK_SESSION_VERSION,
+		accounts: []
+	};
+}
+function storeFromLegacySession(session) {
+	const cloned = cloneSession(session);
+	const id = accountKeyOf(cloned);
+	return {
+		version: GROK_SESSION_VERSION,
+		...id === void 0 ? {} : { activeAccountId: id },
+		accounts: [cloned]
+	};
+}
 function decodeGrokSession(value) {
 	if (!isRecord$7(value)) return void 0;
 	const accessToken = value["accessToken"];
@@ -525,27 +692,121 @@ function decodeGrokSession(value) {
 		...userId === void 0 ? {} : { userId }
 	};
 }
+function findAccountIndex(store, accountId) {
+	if (typeof accountId !== "string" || accountId.length === 0) return -1;
+	const needle = accountId.trim();
+	const lowered = needle.toLowerCase();
+	return store.accounts.findIndex((account) => accountKeyOf(account) === needle || (typeof account.email === "string" && account.email.toLowerCase() === lowered));
+}
+function activeAccountFrom(store) {
+	if (store.accounts.length === 0) return void 0;
+	const index = findAccountIndex(store, store.activeAccountId);
+	return store.accounts[index >= 0 ? index : 0];
+}
+function withActiveAccount(store, session) {
+	const next = cloneSession(session);
+	const id = accountKeyOf(next);
+	return {
+		version: GROK_SESSION_VERSION,
+		...id === void 0 ? {} : { activeAccountId: id },
+		accounts: store.accounts.map((account) => sameAccount(account, next) ? next : cloneSession(account))
+	};
+}
+function upsertAccount(store, session, activate) {
+	const next = cloneSession(session);
+	const accounts = [];
+	let replaced = false;
+	for (const account of store.accounts) {
+		if (sameAccount(account, next)) {
+			accounts.push(next);
+			replaced = true;
+		} else accounts.push(cloneSession(account));
+	}
+	if (!replaced) accounts.push(next);
+	const activeId = activate === false && store.activeAccountId !== void 0 ? store.activeAccountId : accountKeyOf(next) ?? store.activeAccountId;
+	return {
+		version: GROK_SESSION_VERSION,
+		...activeId === void 0 ? {} : { activeAccountId: activeId },
+		accounts
+	};
+}
+function switchActiveAccount(store, accountId) {
+	const index = findAccountIndex(store, accountId);
+	if (index < 0) return void 0;
+	const id = accountKeyOf(store.accounts[index]);
+	return {
+		version: GROK_SESSION_VERSION,
+		...id === void 0 ? {} : { activeAccountId: id },
+		accounts: store.accounts.map(cloneSession)
+	};
+}
+function removeAccount(store, accountId) {
+	const index = findAccountIndex(store, accountId);
+	if (index < 0) return store.accounts.length === 0 ? emptyStore() : {
+		version: GROK_SESSION_VERSION,
+		...store.activeAccountId === void 0 ? {} : { activeAccountId: store.activeAccountId },
+		accounts: store.accounts.map(cloneSession)
+	};
+	const accounts = store.accounts.filter((_, at) => at !== index).map(cloneSession);
+	if (accounts.length === 0) return emptyStore();
+	const removedWasActive = findAccountIndex(store, store.activeAccountId) === index || store.activeAccountId === void 0;
+	const nextActive = removedWasActive ? accountKeyOf(accounts[0]) : store.activeAccountId;
+	return {
+		version: GROK_SESSION_VERSION,
+		...nextActive === void 0 ? {} : { activeAccountId: nextActive },
+		accounts
+	};
+}
+function decodeGrokSessionStore(value) {
+	if (!isRecord$7(value)) return void 0;
+	const accountsValue = value["accounts"];
+	if (Array.isArray(accountsValue)) {
+		const accounts = [];
+		for (const entry of accountsValue) {
+			const session = decodeGrokSession(entry);
+			if (session === void 0) return void 0;
+			accounts.push(session);
+		}
+		const activeAccountId = value["activeAccountId"];
+		if (activeAccountId !== void 0 && (typeof activeAccountId !== "string" || activeAccountId.length === 0)) return void 0;
+		const store = {
+			version: GROK_SESSION_VERSION,
+			...typeof activeAccountId === "string" ? { activeAccountId } : {},
+			accounts
+		};
+		const active = activeAccountFrom(store);
+		if (active !== void 0) {
+			const id = accountKeyOf(active);
+			if (id !== void 0) store.activeAccountId = id;
+		} else delete store.activeAccountId;
+		return store;
+	}
+	const legacy = decodeGrokSession(value);
+	return legacy === void 0 ? void 0 : storeFromLegacySession(legacy);
+}
 /**
 * Read the session file. Missing or corrupt documents are treated as signed-out.
 * @param path - absolute session path.
 */
-async function readSession(path) {
+async function readSessionStore(path) {
 	try {
 		const raw = await readFile(path, "utf8");
-		return decodeGrokSession(JSON.parse(raw));
+		return decodeGrokSessionStore(JSON.parse(raw)) ?? emptyStore();
 	} catch {
-		return;
+		return emptyStore();
 	}
 }
-/**
-* Atomically write the session file with mode `0600`.
-* @param path - absolute session path.
-* @param session - tokens and account identity.
-*/
-async function writeSession(path, session) {
+async function readSession(path) {
+	return activeAccountFrom(await readSessionStore(path));
+}
+async function writeSessionStore(path, store) {
 	await mkdir(dirname(path), { recursive: true });
 	const tmp = `${path}.${randomBytes(8).toString("hex")}.tmp`;
-	const body = `${JSON.stringify(session, null, 2)}\n`;
+	const body = `${JSON.stringify({
+		version: GROK_SESSION_VERSION,
+		...store.activeAccountId === void 0 ? {} : { activeAccountId: store.activeAccountId },
+		accounts: store.accounts.map(cloneSession)
+	}, null, 2)}\n`;
 	try {
 		await writeFile(tmp, body, {
 			encoding: "utf8",
@@ -560,6 +821,19 @@ async function writeSession(path, session) {
 	}
 }
 /**
+* Atomically write the session file with mode `0600`.
+* A single session argument keeps the v1 helper: it upserts that account and
+* makes it active. Multi-account callers pass a store.
+* @param path - absolute session path.
+* @param sessionOrStore - tokens and account identity, or a v2 store.
+*/
+async function writeSession(path, sessionOrStore) {
+	const store = sessionOrStore !== void 0 && isRecord$7(sessionOrStore) && Array.isArray(sessionOrStore.accounts)
+		? sessionOrStore
+		: upsertAccount(await readSessionStore(path), sessionOrStore, true);
+	await writeSessionStore(path, store);
+}
+/**
 * Delete the session file. Missing files are success.
 * @param path - absolute session path.
 */
@@ -570,16 +844,42 @@ async function deleteSession(path) {
 		if (error.code !== "ENOENT") throw error;
 	}
 }
+function accountViewOf(session, active) {
+	return {
+		id: publicAccountId(session),
+		...session.email === void 0 ? {} : { email: session.email },
+		expiresAt: session.expiresAt,
+		active: active === true
+	};
+}
+function statusFromStore(store) {
+	const active = activeAccountFrom(store);
+	if (active === void 0) return {
+		loggedIn: false,
+		accounts: []
+	};
+	const activeId = publicAccountId(active);
+	return {
+		loggedIn: true,
+		...active.email === void 0 ? {} : { email: active.email },
+		expiresAt: active.expiresAt,
+		activeAccountId: activeId,
+		accounts: store.accounts.map((account) => accountViewOf(account, publicAccountId(account) === activeId))
+	};
+}
 /**
 * Project a Host session into the secret-free RPC status view.
 * @param session - current session, if any.
 */
 function statusFromSession(session) {
-	if (session === void 0) return { loggedIn: false };
+	if (session === void 0) return { loggedIn: false, accounts: [] };
+	const id = publicAccountId(session);
 	return {
 		loggedIn: true,
 		...session.email === void 0 ? {} : { email: session.email },
-		expiresAt: session.expiresAt
+		expiresAt: session.expiresAt,
+		activeAccountId: id,
+		accounts: [accountViewOf(session, true)]
 	};
 }
 //#endregion
@@ -972,19 +1272,155 @@ async function refreshSession(runtime, session) {
 * request can retry instead of silently signing the user out.
 * @param runtime - Host OAuth runtime.
 */
-async function ensureFreshSession(runtime) {
+async function ensureFreshStore(runtime) {
 	const path = runtime.resolveSessionPath();
-	const session = await readSession(path);
-	if (session === void 0) return void 0;
-	if (Date.parse(session.expiresAt) - runtime.now() > runtime.refreshSkewMs) return session;
-	const refreshed = await refreshSession(runtime, session);
+	const store = await readSessionStore(path);
+	if (store.accounts.length === 0) return emptyStore();
+	const active = activeAccountFrom(store);
+	if (active === void 0) return store;
+	if (Date.parse(active.expiresAt) - runtime.now() > runtime.refreshSkewMs) return store;
+	const refreshed = await refreshSession(runtime, active);
 	if (!refreshed.ok) {
-		if (refreshed.network === true) return session;
-		await deleteSession(path);
-		return;
+		if (refreshed.network === true) return store;
+		const next = removeAccount(store, publicAccountId(active));
+		if (next.accounts.length === 0) await deleteSession(path);
+		else await writeSessionStore(path, next);
+		return next;
 	}
-	await writeSession(path, refreshed.session);
-	return refreshed.session;
+	const next = withActiveAccount(store, refreshed.session);
+	await writeSessionStore(path, next);
+	return next;
+}
+async function ensureFreshSession(runtime) {
+	return activeAccountFrom(await ensureFreshStore(runtime));
+}
+/**
+* Refresh every saved account that is near expiry, without changing which
+* account is active. Dead IdP rejections drop only that account.
+* @param runtime - Host OAuth runtime.
+*/
+async function ensureFreshAccounts(runtime) {
+	const path = runtime.resolveSessionPath();
+	const store = await readSessionStore(path);
+	if (store.accounts.length === 0) return emptyStore();
+	const kept = [];
+	let changed = false;
+	for (const account of store.accounts) {
+		if (Date.parse(account.expiresAt) - runtime.now() > runtime.refreshSkewMs) {
+			kept.push(cloneSession(account));
+			continue;
+		}
+		const refreshed = await refreshSession(runtime, account);
+		if (!refreshed.ok) {
+			if (refreshed.network === true) {
+				kept.push(cloneSession(account));
+				continue;
+			}
+			changed = true;
+			continue;
+		}
+		changed = true;
+		kept.push(cloneSession(refreshed.session));
+	}
+	if (!changed) return store;
+	if (kept.length === 0) {
+		await deleteSession(path);
+		return emptyStore();
+	}
+	const previousActive = store.activeAccountId;
+	const stillHasActive = previousActive !== void 0 && kept.some((account) => accountKeyOf(account) === previousActive || publicAccountId(account) === previousActive);
+	const nextActive = stillHasActive ? previousActive : accountKeyOf(kept[0]);
+	const next = {
+		version: GROK_SESSION_VERSION,
+		...nextActive === void 0 ? {} : { activeAccountId: nextActive },
+		accounts: kept
+	};
+	await writeSessionStore(path, next);
+	return next;
+}
+function accountUsageFailure(error, session, active) {
+	const secrets = [session.accessToken, session.refreshToken];
+	let message = error instanceof Error && error.message.length > 0 ? error.message : "Grok usage read failed";
+	for (const secret of secrets) {
+		if (secret.length === 0) continue;
+		message = message.split(secret).join("[redacted]");
+	}
+	return {
+		accountId: publicAccountId(session),
+		...session.email === void 0 ? {} : { email: session.email },
+		active,
+		status: "error",
+		message
+	};
+}
+/**
+* Read SuperGrok billing for every saved account without switching the
+* active login used by chat, Imagine, and the composer chip.
+*/
+async function readAllAccountUsage(runtime, options, signal) {
+	const store = await ensureFreshAccounts(runtime);
+	if (store.accounts.length === 0) return {
+		status: "logged-out",
+		accounts: []
+	};
+	const active = activeAccountFrom(store);
+	const activeId = active === void 0 ? void 0 : publicAccountId(active);
+	const accounts = await Promise.all(store.accounts.map(async (session) => {
+		const accountId = publicAccountId(session);
+		const activeAccount = accountId === activeId;
+		const base = {
+			accountId,
+			...session.email === void 0 ? {} : { email: session.email },
+			active: activeAccount
+		};
+		try {
+			const result = await readGrokUsage({
+				accessToken: session.accessToken,
+				...options?.billingURL === void 0 ? {} : { billingURL: options.billingURL },
+				fetch: runtime.fetch,
+				now: runtime.now,
+				signal
+			});
+			if (result.status === "unsupported") return {
+				...base,
+				status: "unsupported"
+			};
+			return {
+				...base,
+				status: "ok",
+				usage: result.usage
+			};
+		} catch (error) {
+			return accountUsageFailure(error, session, activeAccount);
+		}
+	}));
+	return {
+		status: "ok",
+		accounts
+	};
+}
+async function statusFromRuntime(runtime) {
+	return statusFromStore(await ensureFreshStore(runtime));
+}
+async function switchRuntimeAccount(runtime, accountId) {
+	const path = runtime.resolveSessionPath();
+	const switched = switchActiveAccount(await readSessionStore(path), accountId);
+	if (switched === void 0) return retryable("That Grok account is not saved on this machine.");
+	await writeSessionStore(path, switched);
+	return { ok: true, status: statusFromStore(await ensureFreshStore(runtime)) };
+}
+async function removeRuntimeAccount(runtime, accountId) {
+	const path = runtime.resolveSessionPath();
+	const store = await readSessionStore(path);
+	const targetId = accountId ?? (activeAccountFrom(store) === void 0 ? void 0 : publicAccountId(activeAccountFrom(store)));
+	if (targetId === void 0) {
+		await deleteSession(path);
+		return { ok: true, status: statusFromStore(emptyStore()) };
+	}
+	const next = removeAccount(store, targetId);
+	if (next.accounts.length === 0) await deleteSession(path);
+	else await writeSessionStore(path, next);
+	return { ok: true, status: statusFromStore(next.accounts.length === 0 ? emptyStore() : await ensureFreshStore(runtime)) };
 }
 const CALLBACK_OK = "<!doctype html><title>Grok</title><p>Sign-in complete. You can close this window.</p>";
 const CALLBACK_FAIL = "<!doctype html><title>Grok</title><p>Sign-in did not complete. You can close this window and try again.</p>";
@@ -1109,6 +1545,7 @@ async function startPkceLogin(runtime, signal) {
 		authorize.searchParams.set("state", pkce.state);
 		authorize.searchParams.set("code_challenge", pkce.challenge);
 		authorize.searchParams.set("code_challenge_method", "S256");
+		authorize.searchParams.set("prompt", "select_account");
 		const paste = createPendingPaste();
 		pendingPaste.set(runtime, paste);
 		const callback = waitForCallback(server, pkce.state, runtime.timeoutMs, local.signal);
@@ -1150,8 +1587,17 @@ async function startPkceLogin(runtime, signal) {
 		}
 		const session = await parseTokenResponse(tokenResponse, runtime.now(), endpoints.userinfoEndpoint, runtime.fetch);
 		if (session === void 0) return retryable("auth.x.ai returned an unexpected token response. Try signing in again.");
-		await writeSession(runtime.resolveSessionPath(), session);
-		return { ok: true };
+		const path = runtime.resolveSessionPath();
+		const before = await readSessionStore(path);
+		const existing = before.accounts.find((account) => sameAccount(account, session));
+		const next = upsertAccount(before, session, true);
+		await writeSessionStore(path, next);
+		return {
+			ok: true,
+			...existing === void 0 ? {} : { reused: true },
+			...session.email === void 0 ? {} : { email: session.email },
+			accountId: publicAccountId(session)
+		};
 	} catch (error) {
 		const code = error.code;
 		if (code === "ABORT_ERR" || signal?.aborted === true || local.signal.aborted) return retryable("Sign-in was cancelled.");
@@ -1692,11 +2138,15 @@ function createGrokPiAiAuth() {
 */
 async function resolveGrokAccessToken(runtime) {
 	const existing = await readSession(runtime.resolveSessionPath());
+	const existingKey = existing === void 0 ? void 0 : accountKeyOf(existing);
 	const session = await ensureFreshSession(runtime);
 	if (session === void 0) {
 		if (existing !== void 0) throw new LlmError("llm-grok: session refresh failed; sign in again with an xAI subscription", "AUTH");
 		throw new LlmError("llm-grok: not signed in; sign in with an xAI subscription from Plugin configuration", "MISSING_CREDENTIAL");
 	}
+	// Refresh rejection removes only the dead account. Do not silently bill a
+	// different saved Google login in the middle of a chat or Imagine call.
+	if (existingKey !== void 0 && accountKeyOf(session) !== existingKey) throw new LlmError("llm-grok: session refresh failed; sign in again with an xAI subscription", "AUTH");
 	return session.accessToken;
 }
 /**
@@ -2403,35 +2853,47 @@ function percentWindow(id, percent, period, resetsAt) {
 		...resetsAt === void 0 ? {} : { resetsAt }
 	};
 }
-/** Credits flavor: weekly window + per-product usagePercent (0–1). */
+/**
+* Credits flavor: one shared weekly SuperGrok pool (`creditUsagePercent`,
+* 0–100) plus per-product `usagePercent` slices of that same pool.
+* grok.com stacks the slices under "61% used"; the settings card and
+* composer dock do the same instead of treating each product as 0–100.
+*
+* A freshly reset SuperGrok week omits `creditUsagePercent` and
+* `productUsage` instead of sending 0. That is 0% used, not an
+* unrecognized billing surface.
+*/
+function isCreditsSurface(config) {
+	return isRecord(config["currentPeriod"]) || config["isUnifiedBillingUser"] === true;
+}
 function parseCreditsConfig(config, fetchedAt) {
 	const period = periodFromConfig(config);
 	const resetsAt = resetFromConfig(config);
-	const windows = [];
-	const products = config["productUsage"];
-	if (Array.isArray(products)) for (const entry of products) {
+	const products = [];
+	const productUsage = config["productUsage"];
+	if (Array.isArray(productUsage)) for (const entry of productUsage) {
 		if (!isRecord(entry)) continue;
 		const product = entry["product"];
 		if (typeof product !== "string" || product.length === 0) continue;
 		const percent = entry["usagePercent"];
 		if (typeof percent === "number" && Number.isFinite(percent)) {
-			windows.push(percentWindow(product, percent, period, resetsAt));
+			products.push(percentWindow(product, percent, period, resetsAt));
 		} else {
 			// Product is part of the plan but the endpoint reports no usage yet.
-			windows.push({
-				id: product,
-				used: 0,
-				limit: 100,
-				unit: "percent",
-				...period === void 0 ? {} : { period },
-				...resetsAt === void 0 ? {} : { resetsAt }
-			});
+			products.push(percentWindow(product, 0, period, resetsAt));
 		}
 	}
-	if (windows.length === 0) {
-		const percent = config["creditUsagePercent"];
-		if (typeof percent === "number" && Number.isFinite(percent)) windows.push(percentWindow("weekly", percent, period, resetsAt));
-	}
+	const windows = [];
+	const reportedTotal = config["creditUsagePercent"];
+	const totalPercent = typeof reportedTotal === "number" && Number.isFinite(reportedTotal)
+		? reportedTotal
+		: products.length > 0
+			? products.reduce((sum, item) => sum + item.used, 0)
+			: isCreditsSurface(config)
+				? 0
+				: void 0;
+	if (totalPercent !== void 0) windows.push(percentWindow("SuperGrok", totalPercent, period, resetsAt));
+	windows.push(...products);
 	return windows.length === 0 ? void 0 : {
 		fetchedAt,
 		windows
@@ -2659,15 +3121,31 @@ function createGrokRpcHandler(runtime, options) {
 			if (decodeGrokEmptyRequest(payload) === void 0) return internalError("invalid Grok auth status request");
 			return {
 				ok: true,
-				value: statusFromSession(await ensureFreshSession(runtime))
+				value: await statusFromRuntime(runtime)
 			};
 		}
 		if (endpoint === "auth/logout") {
-			if (decodeGrokEmptyRequest(payload) === void 0) return internalError("invalid Grok auth logout request");
-			await deleteSession(runtime.resolveSessionPath());
+			const request = decodeGrokAccountIdRequest(payload);
+			if (request === void 0) return internalError("invalid Grok auth logout request");
 			return {
 				ok: true,
-				value: { ok: true }
+				value: await removeRuntimeAccount(runtime, request.accountId)
+			};
+		}
+		if (endpoint === "auth/switch") {
+			const request = decodeGrokAccountIdRequest(payload);
+			if (request === void 0 || request.accountId === void 0) return internalError("invalid Grok auth switch request");
+			return {
+				ok: true,
+				value: await switchRuntimeAccount(runtime, request.accountId)
+			};
+		}
+		if (endpoint === "auth/remove") {
+			const request = decodeGrokAccountIdRequest(payload);
+			if (request === void 0 || request.accountId === void 0) return internalError("invalid Grok auth remove request");
+			return {
+				ok: true,
+				value: await removeRuntimeAccount(runtime, request.accountId)
 			};
 		}
 		if (endpoint === "auth/complete") {
@@ -2696,8 +3174,16 @@ function createGrokRpcHandler(runtime, options) {
 			};
 		}
 		if (endpoint === "usage/read") {
-			if (decodeGrokEmptyRequest(payload) === void 0) return internalError("invalid Grok usage request");
-			const session = await ensureFreshSession(runtime);
+			const request = decodeGrokAccountIdRequest(payload);
+			if (request === void 0) return internalError("invalid Grok usage request");
+			let session;
+			if (request.accountId === void 0) session = await ensureFreshSession(runtime);
+			else {
+				const store = await ensureFreshAccounts(runtime);
+				const index = findAccountIndex(store, request.accountId);
+				if (index < 0) return internalError("That Grok account is not saved on this machine.");
+				session = store.accounts[index];
+			}
 			if (session === void 0) return {
 				ok: true,
 				value: { status: "logged-out" }
@@ -2715,6 +3201,17 @@ function createGrokRpcHandler(runtime, options) {
 				};
 			} catch (error) {
 				return usageFailure(error, [session.accessToken, session.refreshToken]);
+			}
+		}
+		if (endpoint === "usage/readAll") {
+			if (decodeGrokEmptyRequest(payload) === void 0) return internalError("invalid Grok usage request");
+			try {
+				return {
+					ok: true,
+					value: await readAllAccountUsage(runtime, options, signal)
+				};
+			} catch (error) {
+				return usageFailure(error, []);
 			}
 		}
 		return internalError(`unknown Grok endpoint: ${endpoint}`);
@@ -2765,6 +3262,16 @@ async function saveDisplayedCatalog(ctx, payload) {
 	} catch (error) {
 		return internalError(error instanceof Error && error.message.length > 0 ? error.message : "Grok settings save failed");
 	}
+}
+function isLoopbackAddress(address) {
+	return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+}
+function sendJson(res, statusCode, value) {
+	const body = JSON.stringify(value);
+	res.statusCode = statusCode;
+	res.setHeader("content-type", "application/json; charset=utf-8");
+	res.setHeader("cache-control", "no-store");
+	res.end(body);
 }
 function apply(ctx, config) {
 	let current = () => config;
@@ -2836,12 +3343,66 @@ function apply(ctx, config) {
 		registration.replace([GROK_PROVIDER]);
 		registeredPolicy = policy;
 	};
+	const grokRpc = createGrokRpcHandler(runtime);
 	ctx.inject(["connection"], (connectionCtx) => {
-		const inner = createGrokRpcHandler(runtime);
 		connectionCtx.connection.rpc.handle(GROK_RPC_CHANNEL, async (endpoint, payload, signal) => {
 			if (endpoint === "settings/save") return saveDisplayedCatalog(ctx, payload);
-			return inner(endpoint, payload, signal);
+			return grokRpc(endpoint, payload, signal);
 		}, { authority: "loopback" });
+	});
+	ctx.inject(["webServer"], (web) => {
+		const webServer = web.get("webServer");
+		web.effect(() => webServer.register({
+			kind: "exact",
+			path: GROK_USAGE_HTTP_PATH,
+			handler: async (req, res) => {
+				if (!isLoopbackAddress(req.socket?.remoteAddress)) {
+					sendJson(res, 403, {
+						ok: false,
+						code: "remote-not-supported",
+						error: "Grok usage is only available on the machine running `dsh web`."
+					});
+					return;
+				}
+				if (req.method !== "GET") {
+					res.setHeader("allow", "GET");
+					sendJson(res, 405, {
+						ok: false,
+						code: "method",
+						error: "Method not allowed."
+					});
+					return;
+				}
+				const ac = new AbortController();
+				const onClose = () => ac.abort();
+				res.on("close", onClose);
+				try {
+					const result = await grokRpc("usage/read", {}, ac.signal);
+					if (ac.signal.aborted) return;
+					if (!result.ok) {
+						sendJson(res, 200, {
+							ok: false,
+							code: typeof result.error?.code === "string" ? result.error.code : "internal",
+							error: typeof result.error?.message === "string" ? result.error.message : "Grok usage read failed"
+						});
+						return;
+					}
+					sendJson(res, 200, {
+						ok: true,
+						...result.value
+					});
+				} catch (error) {
+					if (ac.signal.aborted) return;
+					sendJson(res, 200, {
+						ok: false,
+						code: "internal",
+						error: error instanceof Error && error.message.length > 0 ? error.message : "Grok usage read failed"
+					});
+				} finally {
+					res.off("close", onClose);
+				}
+			}
+		}), "dsh-grok-oauth/usage");
 	});
 	installSettingsSection(ctx, NS, Config, config, {
 		setSource: (source) => {
@@ -2891,4 +3452,4 @@ function apply(ctx, config) {
 	});
 }
 //#endregion
-export { Config, DEFAULT_USAGE_REQUEST_TIMEOUT_MS, GROK_4_5_REASONING_EFFORTS, GROK_4_6_REASONING_EFFORTS, GROK_AUTH_COMPLETE_ENDPOINT, GROK_AUTH_LOGOUT_ENDPOINT, GROK_AUTH_START_ENDPOINT, GROK_AUTH_STATUS_ENDPOINT, GROK_BILLING_URL, GROK_CATALOG, GROK_CHAT_BASE_URL, GROK_DEFAULT_CONTEXT_WINDOW, GROK_DEFAULT_MODEL_MAX_TOKENS, GROK_DEFAULT_REASONING_WIRE, GROK_DEFAULT_STREAM_IDLE_TIMEOUT_MS, GROK_IMAGE_GEN_TOOL_NAME, GROK_IMAGINE_ASPECT_RATIOS, GROK_IMAGINE_BASE_URL, GROK_IMAGINE_MODEL, GROK_MODELS_ENDPOINT, GROK_MODELS_URL, GROK_OAUTH_CLIENT_ID, GROK_OAUTH_ISSUER, GROK_OAUTH_SCOPE, GROK_PACKED_REASONING_TYPE, GROK_PLUGIN_IDENTITY_HEADER, GROK_PROVIDER, GROK_REASONING_WIRES, GROK_RPC_CHANNEL, GROK_SAVE_ENDPOINT, GROK_SERVER_SEARCH_TOOLS, GROK_SESSION_FILENAME, GROK_SETTINGS_NAMESPACE, GROK_USAGE_ENDPOINT, GrokAdapter, apply, applyGrokReasoningWire, authNetworkHint, authRejectionHint, completePkceLogin, createGrokAuthRuntime, createGrokFetch, createGrokPiAiProfile, createGrokRpcHandler, decodeGrokAuthCompleteRequest, decodeGrokAuthLogoutReply, decodeGrokAuthStartReply, decodeGrokAuthStatus, decodeGrokEmptyRequest, decodeGrokModelsReply, decodeGrokSaveRequest, decodeGrokSaveResult, decodeGrokSettings, decodeGrokUsageReply, decodeGrokUsageView, deleteSession, ensureFreshSession, expandPackedGrokReasoningInput, fallbackGrokCatalog, filterGrokThinkingStream, generateGrokImage, grokImageGenTool, grokResponsesApi, hasActiveProxy, grokThinkingLevelMap, inject, injectGrokServerSearchTools, isDisplayableThinking, isGrokRequest, isGrokPackedReasoning, isGrokServerSearchToolCallId, name, officialDefaultEffort, officialEffortsFor, packGrokThinkingBlocks, parseGrokBilling, parseGrokModels, readGrokModels, readGrokUsage, readSession, refreshSession, resolveAdapterOptions, resolveGrokAccessToken, resolveGrokReasoningWire, resolveGrokSessionPath, resolveProxySetting, sessionPathForHome, startPkceLogin, statusFromSession, stripGrokServerSearchToolCalls, writeSession };
+export { Config, DEFAULT_USAGE_REQUEST_TIMEOUT_MS, GROK_4_5_REASONING_EFFORTS, GROK_4_6_REASONING_EFFORTS, GROK_AUTH_COMPLETE_ENDPOINT, GROK_AUTH_LOGOUT_ENDPOINT, GROK_AUTH_REMOVE_ENDPOINT, GROK_AUTH_START_ENDPOINT, GROK_AUTH_STATUS_ENDPOINT, GROK_AUTH_SWITCH_ENDPOINT, GROK_BILLING_URL, GROK_CATALOG, GROK_CHAT_BASE_URL, GROK_DEFAULT_CONTEXT_WINDOW, GROK_DEFAULT_MODEL_MAX_TOKENS, GROK_DEFAULT_REASONING_WIRE, GROK_DEFAULT_STREAM_IDLE_TIMEOUT_MS, GROK_IMAGE_GEN_TOOL_NAME, GROK_IMAGINE_ASPECT_RATIOS, GROK_IMAGINE_BASE_URL, GROK_IMAGINE_MODEL, GROK_MODELS_ENDPOINT, GROK_MODELS_URL, GROK_OAUTH_CLIENT_ID, GROK_OAUTH_ISSUER, GROK_OAUTH_SCOPE, GROK_PACKED_REASONING_TYPE, GROK_PLUGIN_IDENTITY_HEADER, GROK_PROVIDER, GROK_REASONING_WIRES, GROK_RPC_CHANNEL, GROK_SAVE_ENDPOINT, GROK_SERVER_SEARCH_TOOLS, GROK_SESSION_FILENAME, GROK_SETTINGS_NAMESPACE, GROK_USAGE_ALL_ENDPOINT, GROK_USAGE_ENDPOINT, GrokAdapter, apply, applyGrokReasoningWire, authNetworkHint, authRejectionHint, completePkceLogin, createGrokAuthRuntime, createGrokFetch, createGrokPiAiProfile, createGrokRpcHandler, accountKeyOf, activeAccountFrom, decodeGrokAccountIdRequest, decodeGrokAuthCompleteRequest, decodeGrokSessionStore, emptyStore, decodeGrokAuthLogoutReply, decodeGrokAuthStartReply, decodeGrokAuthStatus, decodeGrokEmptyRequest, decodeGrokModelsReply, decodeGrokSaveRequest, decodeGrokSaveResult, decodeGrokSettings, decodeGrokAccountUsageView, decodeGrokAccountsUsageReply, decodeGrokUsageReply, decodeGrokUsageView, deleteSession, ensureFreshAccounts, ensureFreshSession, ensureFreshStore, expandPackedGrokReasoningInput, fallbackGrokCatalog, filterGrokThinkingStream, generateGrokImage, grokImageGenTool, grokResponsesApi, hasActiveProxy, grokThinkingLevelMap, inject, injectGrokServerSearchTools, isDisplayableThinking, isGrokRequest, isGrokPackedReasoning, isGrokServerSearchToolCallId, name, officialDefaultEffort, officialEffortsFor, packGrokThinkingBlocks, parseGrokBilling, parseGrokModels, readAllAccountUsage, readGrokModels, readGrokUsage, publicAccountId, readSession, readSessionStore, refreshSession, removeAccount, removeRuntimeAccount, resolveAdapterOptions, resolveGrokAccessToken, resolveGrokReasoningWire, resolveGrokSessionPath, resolveProxySetting, sessionPathForHome, startPkceLogin, statusFromSession, statusFromStore, stripGrokServerSearchToolCalls, switchActiveAccount, switchRuntimeAccount, upsertAccount, writeSession, writeSessionStore };
