@@ -852,14 +852,14 @@ window.__ModuleLoader__.load({
 						color: "var(--dsw-alias-label-tertiary)"
 					},
 					children: props.unsavedLabel
-				}) : null, /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				}) : null, props.open !== void 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 					"aria-hidden": "true",
 					style: {
 						fontSize: 18,
 						transform: props.open ? "rotate(180deg)" : "none"
 					},
 					children: "⌄"
-				})]
+				}) : null]
 			})] });
 		}
 		//#endregion
@@ -2534,74 +2534,54 @@ window.__ModuleLoader__.load({
 			const statusLabel = signingIn ? t("signingIn") : auth.kind === "signed-in" ? formatSignedIn(t, auth.email) : auth.message ?? t("signedOut");
 			const modelCount = draft?.length ?? 0;
 			const headerSummary = formatProviderSummary(auth.kind === "signed-in" || accountCount > 0 ? t("summaryOn") : t("summaryOff"), t("summaryAccounts").replace("{count}", String(accountCount)), t("summaryModels").replace("{count}", String(modelCount)));
+			const staticHeaderStyle = { ...headerStyle$1, cursor: "default" };
 			if (snapshot.status === "unavailable") return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("li", {
 				style: cardStyle,
-				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-					type: "button",
-					style: headerStyle$1,
-					"aria-expanded": open,
-					"aria-label": t(open ? "collapse" : "expand") + ": " + title,
-					onClick: () => {
-						setOpen(!open);
-					},
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					style: staticHeaderStyle,
 					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ProviderCardHeader, {
 						title,
 						mark: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(BrandMark, {}),
-						summary: headerSummary,
-						open
+						summary: headerSummary
 					})
-				}), open ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 					style: bodyStyle,
 					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
 						style: statusStyle$1,
 						role: "status",
 						children: t("remoteAccess")
 					})
-				}) : null]
+				})]
 			});
 			if (snapshot.status !== "ready" || draft === void 0) return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("li", {
 				style: cardStyle,
-				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-					type: "button",
-					style: headerStyle$1,
-					"aria-expanded": open,
-					"aria-label": t(open ? "collapse" : "expand") + ": " + title,
-					onClick: () => {
-						setOpen(!open);
-					},
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					style: staticHeaderStyle,
 					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ProviderCardHeader, {
 						title,
 						mark: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(BrandMark, {}),
-						summary: headerSummary,
-						open
+						summary: headerSummary
 					})
-				}), open ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 					style: bodyStyle,
 					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
 						style: statusStyle$1,
 						children: t("loading")
 					})
-				}) : null]
+				})]
 			});
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("li", {
 				style: cardStyle,
-				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-					type: "button",
-					style: headerStyle$1,
-					"aria-expanded": open,
-					"aria-label": t(open ? "collapse" : "expand") + ": " + title,
-					onClick: () => {
-						setOpen(!open);
-					},
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					style: staticHeaderStyle,
 					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ProviderCardHeader, {
 						title,
 						mark: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(BrandMark, {}),
 						summary: headerSummary,
-						open,
 						unsaved: dirty,
 						unsavedLabel: t("unsaved")
 					})
-				}), open ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					style: bodyStyle,
 					children: [
 						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
@@ -3761,6 +3741,7 @@ window.__ModuleLoader__.load({
 							id: GROK_AUTH_SECTION_ID,
 							order: 11,
 							label: () => t("nav"),
+							icon: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(BrandMark, { size: 14 }),
 							locale: GROK_AUTH_LOCALE_NS,
 							children: { [GROK_AUTH_ITEM_SLOT]: {
 								kind: "keyed",
