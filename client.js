@@ -3048,7 +3048,7 @@ window.__ModuleLoader__.load({
 							})]
 						})
 					]
-				}) : null]
+				})]
 			});
 		}
 		//#endregion
