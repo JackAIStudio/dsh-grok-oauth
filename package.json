@@ -16,7 +16,8 @@
     "client.js",
     "cordis.patch.yml",
     "LICENSE",
-    "README.zh.md"
+    "README.zh.md",
+    "src"
   ],
   "dsh": {
     "bundle": {
@@ -44,6 +45,20 @@
     "url": "git+https://github.com/JackAIStudio/dsh-grok-oauth.git"
   },
   "license": "MIT",
+  "scripts": {
+    "build": "node scripts/build.js",
+    "watch": "node scripts/build.js --watch",
+    "dev": "node scripts/build.js --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "node tests/smoke-test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.0.0"
+  },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.82.1",
     "undici": "^7.0.0"
