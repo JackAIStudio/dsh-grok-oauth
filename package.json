@@ -17,6 +17,7 @@
     "cordis.patch.yml",
     "LICENSE",
     "README.zh.md",
+    "AGENTS.md",
     "src"
   ],
   "dsh": {
