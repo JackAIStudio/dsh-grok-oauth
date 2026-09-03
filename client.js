@@ -3266,6 +3266,64 @@ function apply(ctx) {
     },
     closeModelPicker: picker.close
   });
+  const GROK_NAV_MARKER = "data-dsh-grok-settings-nav";
+  const GROK_NAV_STYLE_ID = "dsh-grok-settings-nav-style";
+  const GROK_SLASH_PATH = "M1.55 16.45 7.65 10.35a1.2 1.2 0 0 1 1.7 0L16.45 1.55 10.35 7.65a1.2 1.2 0 0 1-1.7 0z";
+  const GROK_MASK_SVG = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Ccircle cx='9' cy='9' r='6.75' fill='none' stroke='black' stroke-width='2.2'/%3E%3Cpath fill='black' d='${GROK_SLASH_PATH}'/%3E%3C/svg%3E")`;
+  function installGrokNavStyle() {
+    if (typeof document === "undefined") return;
+    if (document.getElementById(GROK_NAV_STYLE_ID)) return;
+    const style = document.createElement("style");
+    style.id = GROK_NAV_STYLE_ID;
+    style.textContent = `
+    [${GROK_NAV_MARKER}] > svg:first-child {
+      display: none !important;
+    }
+    [${GROK_NAV_MARKER}]::before {
+      content: "" !important;
+      flex: none !important;
+      width: 16px !important;
+      height: 16px !important;
+      background: currentColor !important;
+      -webkit-mask: ${GROK_MASK_SVG} center / contain no-repeat !important;
+      mask: ${GROK_MASK_SVG} center / contain no-repeat !important;
+    }
+  `;
+    document.head.appendChild(style);
+  }
+  function registerGrokSettingsNavIcon(getLabel) {
+    if (typeof document === "undefined") return () => {
+    };
+    installGrokNavStyle();
+    let disposed = false;
+    const sync = () => {
+      if (disposed) return;
+      const buttons = document.querySelectorAll('[role="dialog"] nav button');
+      const label = getLabel ? getLabel().trim() : "";
+      for (const b of buttons) {
+        const text = b.textContent ? b.textContent.trim() : "";
+        const match = label.length > 0 && text === label || text === "Grok OAuth \u767B\u5F55" || text === "Grok OAuth Login";
+        if (match) b.setAttribute(GROK_NAV_MARKER, "");
+        else b.removeAttribute(GROK_NAV_MARKER);
+      }
+    };
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(document.body, { childList: true, subtree: true });
+    const onDocClick = () => {
+      setTimeout(sync, 20);
+      setTimeout(sync, 120);
+    };
+    document.addEventListener("click", onDocClick);
+    return () => {
+      disposed = true;
+      observer.disconnect();
+      document.removeEventListener("click", onDocClick);
+      document.querySelectorAll(`[${GROK_NAV_MARKER}]`).forEach((el) => {
+        el.removeAttribute(GROK_NAV_MARKER);
+      });
+    };
+  }
   ctx.slots.inject("settings.section", () => {
     let disposeSection;
     let disposeLocale;
@@ -3341,8 +3399,10 @@ function apply(ctx) {
       GrokUsageChip
     )
   );
+  const cleanupGrokNavIcon = registerGrokSettingsNavIcon();
   ctx.effect(
     () => () => {
+      cleanupGrokNavIcon();
       if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onGrokUsageVisibility);
       if (typeof window !== "undefined") window.removeEventListener("focus", onGrokUsageFocus);
       grokUsageListeners.clear();
