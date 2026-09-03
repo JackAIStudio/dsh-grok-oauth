@@ -614,7 +614,6 @@ function BrandMark({ size = SIZE } = {}) {
 }
 
 // src/client/components/GrokModelPicker.tsx
-var import_react = require("react");
 var import_jsx_runtime2 = require("react/jsx-runtime");
 var GrokModelPickerController = class {
   snapshot = {
@@ -809,8 +808,8 @@ var solidButtonStyle = {
   color: "var(--dsw-alias-state-business-primary-foreground)"
 };
 function GrokModelPicker(props) {
-  const { t, hooks, closePicker, togglePickerModel, adoptPickerModels } = props;
-  const snapshot = (0, import_react.useSyncExternalStore)(hooks.grokModelPicker.subscribe, hooks.grokModelPicker.getSnapshot);
+  const { t, useGrokModelPicker, closePicker, togglePickerModel, adoptPickerModels } = props;
+  const snapshot = useGrokModelPicker((value) => value);
   if (!snapshot.open) return null;
   return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: rootStyle, role: "dialog", "aria-modal": "true", children: [
     /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { style: maskStyle, onClick: closePicker }),
@@ -849,7 +848,7 @@ function GrokModelPicker(props) {
 }
 
 // src/client/components/GrokPluginCard.tsx
-var import_react4 = require("react");
+var import_react3 = require("react");
 
 // src/common/reasoning.ts
 var GROK_REASONING_WIRES = [
@@ -911,7 +910,7 @@ function officialDefaultEffort(model) {
 }
 
 // src/client/components/SortableList.tsx
-var import_react2 = require("react");
+var import_react = require("react");
 var import_react_dom = require("react-dom");
 var import_jsx_runtime3 = require("react/jsx-runtime");
 var listStyle2 = {
@@ -976,17 +975,17 @@ function SortableList({
   onReorder,
   disabled = false
 }) {
-  const [draggedId, setDraggedId] = (0, import_react2.useState)(null);
-  const [dropTargetId, setDropTargetId] = (0, import_react2.useState)(null);
-  const [previewItems, setPreviewItems] = (0, import_react2.useState)(null);
-  const [dragGhost, setDragGhost] = (0, import_react2.useState)(null);
-  const rowRefs = (0, import_react2.useRef)(/* @__PURE__ */ new Map());
-  const previousRects = (0, import_react2.useRef)(null);
-  const previewRef = (0, import_react2.useRef)(null);
-  const dragGhostRef = (0, import_react2.useRef)(null);
+  const [draggedId, setDraggedId] = (0, import_react.useState)(null);
+  const [dropTargetId, setDropTargetId] = (0, import_react.useState)(null);
+  const [previewItems, setPreviewItems] = (0, import_react.useState)(null);
+  const [dragGhost, setDragGhost] = (0, import_react.useState)(null);
+  const rowRefs = (0, import_react.useRef)(/* @__PURE__ */ new Map());
+  const previousRects = (0, import_react.useRef)(null);
+  const previewRef = (0, import_react.useRef)(null);
+  const dragGhostRef = (0, import_react.useRef)(null);
   const renderedItems = previewItems ?? items;
   const draggedItem = draggedId === null ? void 0 : renderedItems.find((item) => getId(item) === draggedId) ?? items.find((item) => getId(item) === draggedId);
-  (0, import_react2.useEffect)(() => {
+  (0, import_react.useEffect)(() => {
     if (draggedId === null) return;
     const style = document.createElement("style");
     style.textContent = "html.ollama-sortable-dragging, html.ollama-sortable-dragging * { cursor: grabbing !important; user-select: none !important; }";
@@ -1003,7 +1002,7 @@ function SortableList({
       document.body.style.cursor = previousBodyCursor;
     };
   }, [draggedId]);
-  (0, import_react2.useEffect)(() => {
+  (0, import_react.useEffect)(() => {
     if (draggedId === null) return;
     const handlePointerMove = (event) => {
       const currentGhost = dragGhostRef.current;
@@ -1042,7 +1041,7 @@ function SortableList({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [draggedId]);
-  (0, import_react2.useLayoutEffect)(() => {
+  (0, import_react.useLayoutEffect)(() => {
     const rects = previousRects.current;
     if (rects === null) return;
     previousRects.current = null;
@@ -1698,7 +1697,7 @@ function renderAccountsUsage(accounts, t) {
 }
 
 // src/client/components/UsageChip.tsx
-var import_react3 = require("react");
+var import_react2 = require("react");
 var import_jsx_runtime7 = require("react/jsx-runtime");
 var GROK_USAGE_FOCUS_DEBOUNCE_MS = 15e3;
 var grokUsageDockCss = [
@@ -1746,8 +1745,8 @@ function grokUsageEmit() {
   for (const listener of grokUsageListeners) listener();
 }
 function useGrokUsageStore() {
-  const [, bump] = (0, import_react3.useState)(0);
-  (0, import_react3.useEffect)(() => {
+  const [, bump] = (0, import_react2.useState)(0);
+  (0, import_react2.useEffect)(() => {
     const onChange = () => bump((n) => n + 1);
     grokUsageListeners.add(onChange);
     return () => {
@@ -1838,8 +1837,8 @@ function GrokUsageChip(props) {
   const blank = isBlankComposer(props.useSession);
   const snapshot = useGrokUsageStore();
   const running = typeof props.useSession === "function" ? props.useSession((s) => s.running) : false;
-  const prevRunning = (0, import_react3.useRef)(running);
-  (0, import_react3.useEffect)(() => {
+  const prevRunning = (0, import_react2.useRef)(running);
+  (0, import_react2.useEffect)(() => {
     if (prevRunning.current === true && running === false) loadGrokUsage(true);
     prevRunning.current = running;
   }, [running]);
@@ -2227,39 +2226,39 @@ function GrokPluginCard(props) {
     fetchModels
   } = props;
   const snapshot = props.useGrokSettings((value) => value);
-  const initial = (0, import_react4.useMemo)(
+  const initial = (0, import_react3.useMemo)(
     () => snapshot.value === void 0 ? void 0 : snapshot.value.models.map(modelDraftOf),
     [snapshot.value]
   );
-  const [source, setSource] = (0, import_react4.useState)(initial);
-  const [draft, setDraft] = (0, import_react4.useState)(initial);
-  const [sourceRevision, setSourceRevision] = (0, import_react4.useState)(snapshot.revision);
-  const [auth, setAuth] = (0, import_react4.useState)({ kind: "signed-out", accounts: [] });
-  const [pasteCode, setPasteCode] = (0, import_react4.useState)("");
-  const [usage, setUsage] = (0, import_react4.useState)({
+  const [source, setSource] = (0, import_react3.useState)(initial);
+  const [draft, setDraft] = (0, import_react3.useState)(initial);
+  const [sourceRevision, setSourceRevision] = (0, import_react3.useState)(snapshot.revision);
+  const [auth, setAuth] = (0, import_react3.useState)({ kind: "signed-out", accounts: [] });
+  const [pasteCode, setPasteCode] = (0, import_react3.useState)("");
+  const [usage, setUsage] = (0, import_react3.useState)({
     status: "idle"
   });
-  const [lastAccounts, setLastAccounts] = (0, import_react4.useState)(void 0);
-  const [usageUpdatedAt, setUsageUpdatedAt] = (0, import_react4.useState)(void 0);
-  const [enableImageGen, setEnableImageGen] = (0, import_react4.useState)(snapshot.value?.enableImageGen === true);
-  const [sourceEnableImageGen, setSourceEnableImageGen] = (0, import_react4.useState)(snapshot.value?.enableImageGen === true);
-  const [serverSearch, setServerSearch] = (0, import_react4.useState)(snapshot.value?.serverSearch === true);
-  const [sourceServerSearch, setSourceServerSearch] = (0, import_react4.useState)(snapshot.value?.serverSearch === true);
-  const [proxy, setProxy] = (0, import_react4.useState)(snapshot.value?.proxy ?? "");
-  const [sourceProxy, setSourceProxy] = (0, import_react4.useState)(snapshot.value?.proxy ?? "");
-  const [catalogOpen, setCatalogOpen] = (0, import_react4.useState)(false);
-  const [expandedModels, setExpandedModels] = (0, import_react4.useState)(/* @__PURE__ */ new Set());
-  const [busy, setBusy] = (0, import_react4.useState)(false);
-  const [fetching, setFetching] = (0, import_react4.useState)(false);
-  const [failure, setFailure] = (0, import_react4.useState)(void 0);
-  const [notice, setNotice] = (0, import_react4.useState)(void 0);
+  const [lastAccounts, setLastAccounts] = (0, import_react3.useState)(void 0);
+  const [usageUpdatedAt, setUsageUpdatedAt] = (0, import_react3.useState)(void 0);
+  const [enableImageGen, setEnableImageGen] = (0, import_react3.useState)(snapshot.value?.enableImageGen === true);
+  const [sourceEnableImageGen, setSourceEnableImageGen] = (0, import_react3.useState)(snapshot.value?.enableImageGen === true);
+  const [serverSearch, setServerSearch] = (0, import_react3.useState)(snapshot.value?.serverSearch === true);
+  const [sourceServerSearch, setSourceServerSearch] = (0, import_react3.useState)(snapshot.value?.serverSearch === true);
+  const [proxy, setProxy] = (0, import_react3.useState)(snapshot.value?.proxy ?? "");
+  const [sourceProxy, setSourceProxy] = (0, import_react3.useState)(snapshot.value?.proxy ?? "");
+  const [catalogOpen, setCatalogOpen] = (0, import_react3.useState)(false);
+  const [expandedModels, setExpandedModels] = (0, import_react3.useState)(/* @__PURE__ */ new Set());
+  const [busy, setBusy] = (0, import_react3.useState)(false);
+  const [fetching, setFetching] = (0, import_react3.useState)(false);
+  const [failure, setFailure] = (0, import_react3.useState)(void 0);
+  const [notice, setNotice] = (0, import_react3.useState)(void 0);
   const title = t("title");
   const signingIn = auth.kind === "signing-in";
   const disabled = snapshot.status !== "ready" || !snapshot.writable || busy;
   const dirty = source !== void 0 && draft !== void 0 && !sameDraft(source, draft) || enableImageGen !== sourceEnableImageGen || serverSearch !== sourceServerSearch || proxy !== sourceProxy;
   const invalid = draft !== void 0 && modelFailure(draft);
   const customModels = snapshot.user !== void 0 && Object.prototype.hasOwnProperty.call(snapshot.user, "models");
-  (0, import_react4.useEffect)(() => {
+  (0, import_react3.useEffect)(() => {
     if (snapshot.status !== "ready" || snapshot.value === void 0) return;
     if (snapshot.revision === sourceRevision) return;
     if (dirty) return;
@@ -2274,7 +2273,7 @@ function GrokPluginCard(props) {
     setSourceProxy(snapshot.value.proxy ?? "");
     setSourceRevision(snapshot.revision);
   }, [dirty, snapshot.revision, snapshot.status, snapshot.value, sourceRevision]);
-  (0, import_react4.useEffect)(() => () => {
+  (0, import_react3.useEffect)(() => () => {
     props.closeModelPicker();
   }, [props.closeModelPicker]);
   const loadUsage = async () => {
@@ -2310,7 +2309,7 @@ function GrokPluginCard(props) {
     setUsageUpdatedAt(void 0);
     setUsage({ status: "idle" });
   };
-  (0, import_react4.useEffect)(() => {
+  (0, import_react3.useEffect)(() => {
     let cancelled = false;
     readAuthStatus().then((status) => {
       if (cancelled) return;
@@ -2328,7 +2327,7 @@ function GrokPluginCard(props) {
   }, [readAuthStatus, t]);
   const authEmail = "email" in auth ? auth.email : void 0;
   const authActiveAccountId = "activeAccountId" in auth ? auth.activeAccountId : void 0;
-  (0, import_react4.useEffect)(() => {
+  (0, import_react3.useEffect)(() => {
     if (auth.kind !== "signed-in" && auth.kind !== "signing-in" || auth.kind === "signing-in" && authActiveAccountId === void 0)
       return;
     setUsage({ status: "loading" });

@@ -1,4 +1,4 @@
-import React, { useSyncExternalStore } from "react";
+import React from "react";
 import type { GrokCatalogModel } from "../../common/contract.js";
 import type { LocaleDict } from "../locales.js";
 
@@ -226,17 +226,26 @@ const solidButtonStyle: React.CSSProperties = {
   color: "var(--dsw-alias-state-business-primary-foreground)"
 };
 
+/**
+ * slot 渲染器（dsh-client-ui-renderer）会把 entry 自身 inject() 里的
+ * `hooks.<name>` 转换成 `use<Name>(selector)` 形式的 observable hook prop
+ * （见其 bindInjectHooks），并不会原样透传 `hooks` 对象。
+ * 旧实现读 `props.hooks.grokModelPicker` 会在首渲染直接 TypeError，
+ * 导致整个 shell.overlay entry 坠毁、选择器弹窗永远打不开。
+ */
 export interface GrokModelPickerProps {
   t: (key: keyof LocaleDict) => string;
-  hooks: { grokModelPicker: GrokModelPickerController };
+  useGrokModelPicker: (
+    selector: (snapshot: GrokModelPickerSnapshot) => GrokModelPickerSnapshot
+  ) => GrokModelPickerSnapshot;
   closePicker: () => void;
   togglePickerModel: (id: string) => void;
   adoptPickerModels: () => void;
 }
 
 export function GrokModelPicker(props: GrokModelPickerProps) {
-  const { t, hooks, closePicker, togglePickerModel, adoptPickerModels } = props;
-  const snapshot = useSyncExternalStore(hooks.grokModelPicker.subscribe, hooks.grokModelPicker.getSnapshot);
+  const { t, useGrokModelPicker, closePicker, togglePickerModel, adoptPickerModels } = props;
+  const snapshot = useGrokModelPicker((value) => value);
   if (!snapshot.open) return null;
   return (
     <div style={rootStyle} role="dialog" aria-modal="true">
