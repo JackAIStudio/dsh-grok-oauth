@@ -102,7 +102,23 @@ export const GROK_SAVE_ENDPOINT = "settings/save";
 /** OAuth & API URLs */
 export const GROK_OAUTH_ISSUER = "https://auth.x.ai";
 export const GROK_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
-export const GROK_OAUTH_SCOPE = ["openid", "email", "profile", "offline_access", "model:read", "model:write"];
+/**
+ * Scopes the official Grok CLI requests. `grok-cli:access` is what
+ * cli-chat-proxy billing and chat treat as a CLI token; `api:access` alone
+ * signs in but is rejected as "must be performed by Grok CLI token users".
+ */
+export const GROK_OAUTH_SCOPE = [
+  "openid",
+  "profile",
+  "email",
+  "offline_access",
+  "grok-cli:access",
+  "api:access",
+  "conversations:read",
+  "conversations:write",
+  "workspaces:read",
+  "workspaces:write"
+];
 export const GROK_OAUTH_AUTHORIZE_PATH = "/oauth2/authorize";
 export const GROK_OAUTH_TOKEN_PATH = "/oauth2/token";
 export const GROK_OAUTH_TIMEOUT_MS = 300000;

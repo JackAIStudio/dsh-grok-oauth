@@ -16,6 +16,9 @@ assert.equal(typeof hostModule.createGrokAuthRuntime, "function", "createGrokAut
 assert.equal(typeof hostModule.parseGrokBilling, "function", "parseGrokBilling must be exported");
 assert.equal(typeof hostModule.parseGrokModels, "function", "parseGrokModels must be exported");
 assert.equal(typeof hostModule.grokImageGenTool, "function", "grokImageGenTool must be exported");
+assert.ok(Array.isArray(hostModule.GROK_OAUTH_SCOPE), "GROK_OAUTH_SCOPE must be an array");
+assert.ok(hostModule.GROK_OAUTH_SCOPE.includes("grok-cli:access"), "GROK_OAUTH_SCOPE must include grok-cli:access");
+assert.ok(!hostModule.GROK_OAUTH_SCOPE.includes("model:read"), "GROK_OAUTH_SCOPE must not include unknown scope model:read");
 console.log("  Host exports: PASS");
 
 console.log("[test] 2. Checking Pure Logic & Billing Parser...");

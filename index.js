@@ -71,7 +71,18 @@ var GROK_MODELS_ENDPOINT = "models/list";
 var GROK_SAVE_ENDPOINT = "settings/save";
 var GROK_OAUTH_ISSUER = "https://auth.x.ai";
 var GROK_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
-var GROK_OAUTH_SCOPE = ["openid", "email", "profile", "offline_access", "model:read", "model:write"];
+var GROK_OAUTH_SCOPE = [
+  "openid",
+  "profile",
+  "email",
+  "offline_access",
+  "grok-cli:access",
+  "api:access",
+  "conversations:read",
+  "conversations:write",
+  "workspaces:read",
+  "workspaces:write"
+];
 var GROK_OAUTH_AUTHORIZE_PATH = "/oauth2/authorize";
 var GROK_OAUTH_TOKEN_PATH = "/oauth2/token";
 var GROK_OAUTH_TIMEOUT_MS = 3e5;
