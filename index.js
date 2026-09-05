@@ -3,7 +3,6 @@
 
 // src/host/index.ts
 import Schema from "@deepseek-ai/schemastery";
-import { installSettingsSection } from "@deepseek-ai/dsh-settings";
 import { MAX_TIMER_DELAY_MS } from "@deepseek-ai/dsh-timeout";
 import { RetryPolicySchema, resolveRetryPolicy } from "@deepseek-ai/dsh-llm";
 
@@ -2940,6 +2939,21 @@ async function saveDisplayedCatalog(ctx, payload) {
 
 // src/host/index.ts
 var z = Schema;
+function installSectionCompat(ctx, ns, schema, entry, hooks) {
+  ctx.inject(["settings"], (sctx) => {
+    if (sctx.settings && typeof sctx.settings.installSection === "function") {
+      sctx.settings.installSection(ctx, ns, schema, entry, hooks);
+    } else if (sctx.settings && typeof sctx.settings.register === "function") {
+      const scope = sctx.settings.register(ns, schema, {
+        base: entry,
+        ...hooks.validate ? { validate: hooks.validate } : {}
+      });
+      hooks.setSource(() => scope.get());
+      hooks.onChange();
+      scope.watch?.(() => hooks.onChange());
+    }
+  });
+}
 var deepEqualJson2 = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 var settingsNamespace2 = (ns) => ns;
 var DEFAULT_MAX_RETRIES = 2;
@@ -3140,7 +3154,7 @@ function apply(ctx, config) {
       "dsh-grok-oauth/usage"
     );
   });
-  installSettingsSection(ctx, NS2, Config, config, {
+  installSectionCompat(ctx, NS2, Config, config, {
     setSource: (source) => {
       current = source;
     },

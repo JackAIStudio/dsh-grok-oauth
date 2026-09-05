@@ -1,6 +1,20 @@
 import Schema from "@deepseek-ai/schemastery";
 const z = Schema;
-import { installSettingsSection } from "@deepseek-ai/dsh-settings";
+function installSectionCompat(ctx: any, ns: string, schema: any, entry: any, hooks: any) {
+  ctx.inject(["settings"], (sctx: any) => {
+    if (sctx.settings && typeof sctx.settings.installSection === "function") {
+      sctx.settings.installSection(ctx, ns, schema, entry, hooks);
+    } else if (sctx.settings && typeof sctx.settings.register === "function") {
+      const scope = sctx.settings.register(ns, schema, {
+        base: entry,
+        ...(hooks.validate ? { validate: hooks.validate } : {}),
+      });
+      hooks.setSource(() => scope.get());
+      hooks.onChange();
+      scope.watch?.(() => hooks.onChange());
+    }
+  });
+}
 const deepEqualJson = (a: any, b: any) => JSON.stringify(a) === JSON.stringify(b);
 const settingsNamespace = (ns: string) => ns as any;
 import { MAX_TIMER_DELAY_MS } from "@deepseek-ai/dsh-timeout";
@@ -377,7 +391,7 @@ export function apply(ctx: any, config: any): void {
     );
   });
 
-  installSettingsSection(ctx, NS, Config, config, {
+  installSectionCompat(ctx, NS, Config, config, {
     setSource: (source: any) => {
       current = source;
     },
