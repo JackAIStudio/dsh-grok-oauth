@@ -6,7 +6,8 @@ import {
   decodeGrokSettings,
   type GrokSaveResult
 } from "../common/contract.js";
-import { deepEqualJson, settingsNamespace } from "@deepseek-ai/dsh-settings";
+const deepEqualJson = (a: any, b: any) => JSON.stringify(a) === JSON.stringify(b);
+const settingsNamespace = (ns: string) => ns as any;
 import { GROK_SETTINGS_NAMESPACE } from "../common/constants.js";
 import {
   completePkceLogin,

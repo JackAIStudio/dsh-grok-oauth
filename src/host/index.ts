@@ -1,6 +1,8 @@
 import Schema from "@deepseek-ai/schemastery";
 const z = Schema;
-import { deepEqualJson, installSettingsSection, settingsNamespace } from "@deepseek-ai/dsh-settings";
+import { installSettingsSection } from "@deepseek-ai/dsh-settings";
+const deepEqualJson = (a: any, b: any) => JSON.stringify(a) === JSON.stringify(b);
+const settingsNamespace = (ns: string) => ns as any;
 import { MAX_TIMER_DELAY_MS } from "@deepseek-ai/dsh-timeout";
 import { RetryPolicySchema, resolveRetryPolicy } from "@deepseek-ai/dsh-llm";
 import {

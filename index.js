@@ -3,7 +3,7 @@
 
 // src/host/index.ts
 import Schema from "@deepseek-ai/schemastery";
-import { deepEqualJson as deepEqualJson2, installSettingsSection, settingsNamespace as settingsNamespace2 } from "@deepseek-ai/dsh-settings";
+import { installSettingsSection } from "@deepseek-ai/dsh-settings";
 import { MAX_TIMER_DELAY_MS } from "@deepseek-ai/dsh-timeout";
 import { RetryPolicySchema, resolveRetryPolicy } from "@deepseek-ai/dsh-llm";
 
@@ -2744,7 +2744,8 @@ var GrokAdapter = class extends LlmAdapter {
 };
 
 // src/host/rpc.ts
-import { deepEqualJson, settingsNamespace } from "@deepseek-ai/dsh-settings";
+var deepEqualJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+var settingsNamespace = (ns) => ns;
 var NS = settingsNamespace(GROK_SETTINGS_NAMESPACE);
 function internalError(message) {
   return {
@@ -2939,6 +2940,8 @@ async function saveDisplayedCatalog(ctx, payload) {
 
 // src/host/index.ts
 var z = Schema;
+var deepEqualJson2 = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+var settingsNamespace2 = (ns) => ns;
 var DEFAULT_MAX_RETRIES = 2;
 var name = "llm-grok";
 var inject = ["llm"];
