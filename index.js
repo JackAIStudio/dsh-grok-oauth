@@ -94,7 +94,7 @@ var GROK_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credit
 var DEFAULT_USAGE_REQUEST_TIMEOUT_MS = 15e3;
 var MAX_USAGE_BYTES = 1048576;
 var GROK_IMAGINE_BASE_URL = "https://api.x.ai/v1";
-var GROK_IMAGINE_MODEL = "grok-imagine-image-quality";
+var GROK_IMAGINE_MODEL = "grok-imagine-image-2.0";
 var GROK_IMAGINE_ASPECT_RATIOS = [
   "1:1",
   "16:9",
@@ -109,6 +109,8 @@ var GROK_IMAGINE_ASPECT_RATIOS = [
   "9:19.5",
   "20:9",
   "9:20",
+  "21:9",
+  "5:2",
   "auto"
 ];
 var GROK_IMAGE_GEN_TIMEOUT_MS = 3e5;
@@ -2027,7 +2029,7 @@ import { LlmAdapter, LlmError, ReasoningEffortId } from "@deepseek-ai/dsh-llm";
 import { PiAiAdapter } from "@deepseek-ai/dsh-llm-pi-ai";
 
 // src/host/image-gen.ts
-import { mkdir as mkdir2, writeFile as writeFile2 } from "node:fs/promises";
+import { mkdir as mkdir2, readFile as readFile2, writeFile as writeFile2 } from "node:fs/promises";
 import { basename, dirname as dirname2 } from "node:path";
 import { createRequire } from "node:module";
 import { AttachmentId } from "@deepseek-ai/dsh-attachment";
@@ -2168,20 +2170,33 @@ async function generateGrokImage(request) {
   }
   const timeoutMs = request.timeoutMs ?? GROK_IMAGE_GEN_TIMEOUT_MS;
   const fetchImpl = request.fetchImpl ?? fetch;
-  const body = {
+  const isEdit = request.referenceImages !== void 0 && request.referenceImages.length > 0;
+  const wants2k = /\b2k\b/i.test(prompt);
+  const body = isEdit ? {
     model: GROK_IMAGINE_MODEL,
     prompt,
     n: 1,
+    images: request.referenceImages,
     response_format: "b64_json",
-    ...request.aspectRatio === void 0 ? {} : { aspect_ratio: request.aspectRatio }
+    ...request.aspectRatio === void 0 ? {} : { aspect_ratio: request.aspectRatio },
+    ...wants2k ? { resolution: "2k" } : {}
+  } : {
+    model: GROK_IMAGINE_MODEL,
+    prompt,
+    n: 1,
+    quality: "medium",
+    response_format: "b64_json",
+    ...request.aspectRatio === void 0 ? {} : { aspect_ratio: request.aspectRatio },
+    ...wants2k ? { resolution: "2k" } : {}
   };
+  const endpoint = isEdit ? `${GROK_IMAGINE_BASE_URL}/images/edits` : imagesURL(request.imagesURL);
   const attempts = 2;
   let raw = "";
   let response;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const { signal, timeout, dispose } = combineSignals(request.signal, timeoutMs);
     try {
-      response = await fetchImpl(imagesURL(request.imagesURL), {
+      response = await fetchImpl(endpoint, {
         method: "POST",
         headers: requestHeaders(request.accessToken),
         body: JSON.stringify(body),
@@ -2300,7 +2315,7 @@ function aspectRatioOf(value) {
 function grokImageGenTool(ctx, options) {
   return defineTool({
     name: GROK_IMAGE_GEN_TOOL_NAME,
-    description: "Generate a raster image with Grok Imagine (xAI SuperGrok / Grok Build session). Uses this plugin's xAI login and subscription credits. Distinct from Codex `codex_generate_image`. Do not call unless the user asked for a bitmap image.",
+    description: 'Generate a raster image with Grok Imagine (xAI SuperGrok / Grok Build session). Uses this plugin\'s xAI login and subscription credits. When reference_images is provided, the request becomes a multi-reference edit on /v1/images/edits (up to 5 reference images; refer to them as <IMAGE_0>, <IMAGE_1>, ... in the prompt). If the prompt contains "2k", the image is generated at 2k resolution (default: 1k). Distinct from Codex `codex_generate_image`. Do not call unless the user asked for a bitmap image.',
     parameters: {
       prompt: {
         type: "string",
@@ -2311,6 +2326,11 @@ function grokImageGenTool(ctx, options) {
         type: "string",
         enum: [...GROK_IMAGINE_ASPECT_RATIOS],
         description: "Optional aspect ratio. Examples: 1:1, 16:9, 9:16, auto."
+      },
+      reference_images: {
+        type: "array",
+        items: { type: "string" },
+        description: "Optional. 1-5 local image paths (PNG/JPEG/WebP/GIF) used as reference images for multi-image editing. When provided, the request goes to /v1/images/edits and the prompt should refer to them as <IMAGE_0>, <IMAGE_1>, etc."
       },
       path: {
         type: "string",
@@ -2377,11 +2397,30 @@ function grokImageGenTool(ctx, options) {
       const attachments = ctx.attachments;
       const accessToken = await options.resolveAccessToken();
       const aspectRatio = aspectRatioOf(args.aspect_ratio);
+      let referenceImages;
+      if (Array.isArray(args.reference_images) && args.reference_images.length > 0) {
+        const cwd = exec.agent?.session.header.cwd;
+        referenceImages = [];
+        for (const ref2 of args.reference_images.slice(0, 5)) {
+          const refPath = String(ref2);
+          const resolved = await ctx.fs.resolve(refPath, {
+            ...cwd === void 0 ? {} : { cwd },
+            signal: exec.signal
+          });
+          const bytes = await readFile2(ctx.fs.processPath(resolved));
+          const mediaType = mediaTypeOf(bytes);
+          if (mediaType === void 0) {
+            throw new Error(`reference image ${refPath} is not a PNG, JPEG, WebP, or GIF file`);
+          }
+          referenceImages.push({ url: `data:${mediaType};base64,${Buffer.from(bytes).toString("base64")}` });
+        }
+      }
       const generated = await generateGrokImage({
         accessToken,
         prompt,
         signal: exec.signal,
         ...aspectRatio === void 0 ? {} : { aspectRatio },
+        ...referenceImages === void 0 ? {} : { referenceImages },
         ...options.imagesURL === void 0 ? {} : { imagesURL: options.imagesURL },
         ...options.fetchImpl === void 0 ? {} : { fetchImpl: options.fetchImpl }
       }).catch((error) => {
@@ -2394,7 +2433,10 @@ function grokImageGenTool(ctx, options) {
       if (!attachments.imageLimits.mediaTypes.includes(generated.mediaType)) {
         throw new Error(`${generated.mediaType} images are disabled by this deployment`);
       }
-      const relativePath = args.path === void 0 || args.path.trim().length === 0 ? defaultRelativePath(prompt, generated.mediaType) : args.path.trim();
+      const requestedPath = args.path === void 0 || args.path.trim().length === 0 ? defaultRelativePath(prompt, generated.mediaType) : args.path.trim();
+      const desiredExt = extensionOf(generated.mediaType);
+      const currentExt = basename(requestedPath).includes(".") ? basename(requestedPath).split(".").pop() : "";
+      const relativePath = currentExt.length > 0 && currentExt.toLowerCase() !== desiredExt ? requestedPath.replace(/\.[^.]+$/, `.${desiredExt}`) : requestedPath;
       const ref = await attachments.saveImage({
         data: generated.bytes,
         mediaType: generated.mediaType,

@@ -134,7 +134,7 @@ export const DEFAULT_USAGE_REQUEST_TIMEOUT_MS = 15000;
 export const MAX_USAGE_BYTES = 1048576;
 
 export const GROK_IMAGINE_BASE_URL = "https://api.x.ai/v1";
-export const GROK_IMAGINE_MODEL = "grok-imagine-image-quality";
+export const GROK_IMAGINE_MODEL = "grok-imagine-image-2.0";
 export const GROK_IMAGINE_ASPECT_RATIOS = [
   "1:1",
   "16:9",
@@ -149,6 +149,8 @@ export const GROK_IMAGINE_ASPECT_RATIOS = [
   "9:19.5",
   "20:9",
   "9:20",
+  "21:9",
+  "5:2",
   "auto"
 ];
 export const GROK_IMAGE_GEN_TIMEOUT_MS = 300000;
