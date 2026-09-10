@@ -47,6 +47,7 @@ src/
 │   ├── adapter.ts           # Pi-AI 适配器对接与 GrokAdapter 类实现
 │   ├── image-gen.ts         # Grok Imagine 生图工具（grok_image_gen）
 │   ├── rpc.ts               # RPC 请求路由与分发处理
+│   ├── native-search.ts     # 独立 Responses web_search（给 follow 搜索插件）
 │   └── index.ts             # Cordis 插件入口（apply、Config、生命周期装配）
 │
 └── client/                  # 前端 Web UI 模块（React 18）

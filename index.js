@@ -2784,6 +2784,126 @@ var GrokAdapter = class extends LlmAdapter {
   }
 };
 
+// src/host/native-search.ts
+var GROK_NATIVE_SEARCH_SERVICE = "grokNativeSearch";
+function pushSource(sources, seen, url, title) {
+  if (typeof url !== "string" || !/^https?:\/\//u.test(url)) return;
+  const label = typeof title === "string" && title.length > 0 && title !== url ? title : void 0;
+  if (seen.has(url)) {
+    const existing = sources.find((source) => source.url === url);
+    if (existing !== void 0 && existing.title === void 0 && label !== void 0) existing.title = label;
+    return;
+  }
+  seen.add(url);
+  const item = { url };
+  if (label !== void 0) item.title = label;
+  sources.push(item);
+}
+function fillTitlesFromText(sources, text) {
+  const byUrl = new Map(sources.map((source) => [source.url, source]));
+  const line = /^(.*?)\s+[-–—|]\s+(https?:\/\/\S+)/gmu;
+  for (const match of text.matchAll(line)) {
+    const title = match[1]?.trim();
+    const url = match[2];
+    if (!url || !title) continue;
+    const existing = byUrl.get(url);
+    if (existing && existing.title === void 0) existing.title = title;
+  }
+}
+function parseGrokSearchSources(payload, maxResults) {
+  const sources = [];
+  const seen = /* @__PURE__ */ new Set();
+  if (!isRecord(payload) || !Array.isArray(payload["output"])) {
+    return { sources, truncated: false };
+  }
+  const texts = [];
+  for (const block of payload["output"]) {
+    if (!isRecord(block)) continue;
+    if (block["type"] === "web_search_call") {
+      const action = isRecord(block["action"]) ? block["action"] : void 0;
+      const listed = action !== void 0 && Array.isArray(action["sources"]) ? action["sources"] : [];
+      for (const entry of listed) {
+        if (!isRecord(entry)) continue;
+        pushSource(sources, seen, entry["url"], entry["title"]);
+      }
+    }
+    const content = Array.isArray(block["content"]) ? block["content"] : [];
+    for (const part of content) {
+      if (!isRecord(part)) continue;
+      if (typeof part["text"] === "string") texts.push(part["text"]);
+      const annotations = Array.isArray(part["annotations"]) ? part["annotations"] : [];
+      for (const annotation of annotations) {
+        if (!isRecord(annotation)) continue;
+        pushSource(sources, seen, annotation["url"], annotation["title"]);
+      }
+    }
+  }
+  if (texts.length > 0) fillTitlesFromText(sources, texts.join("\n"));
+  const limit = typeof maxResults === "number" && maxResults > 0 ? maxResults : sources.length;
+  return {
+    sources: sources.slice(0, limit),
+    truncated: sources.length > limit
+  };
+}
+async function grokNativeWebSearch(input) {
+  const query = input.query.trim();
+  if (query.length === 0) throw new Error("grok native search: query must be non-empty");
+  const body = {
+    model: input.model && input.model.length > 0 ? input.model : "grok-4.6",
+    stream: false,
+    max_output_tokens: 2048,
+    tools: [{ type: "web_search" }],
+    input: `Perform a web search for the query: ${query}. Return only source titles and URLs.`,
+    reasoning: { effort: "low" }
+  };
+  const response = await input.fetch(`${GROK_CHAT_BASE_URL}/responses`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${input.accessToken}`,
+      "content-type": "application/json",
+      accept: "application/json",
+      ...GROK_CLI_REQUEST_HEADERS
+    },
+    body: JSON.stringify(body),
+    signal: input.signal
+  });
+  const raw = await response.text();
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    throw new Error(`grok native search: unreadable response (HTTP ${response.status})`);
+  }
+  if (!response.ok) {
+    const record = isRecord(payload) ? payload : {};
+    const detail = isRecord(record["error"]) ? record["error"]["message"] : record["message"];
+    const suffix = typeof detail === "string" && detail.length > 0 ? `: ${detail}` : "";
+    throw new Error(`grok native search: HTTP ${response.status}${suffix}`);
+  }
+  const parsed = parseGrokSearchSources(payload, input.maxResults);
+  return parsed;
+}
+function installGrokNativeSearch(ctx, input) {
+  const api = {
+    available() {
+      return true;
+    },
+    async search(query, options) {
+      const accessToken = await resolveGrokAccessToken(input.runtime);
+      const fetchImpl = createGrokFetch(input.proxy(), ctx.logger);
+      return grokNativeWebSearch({
+        fetch: fetchImpl,
+        accessToken,
+        query,
+        model: options?.model,
+        maxResults: options?.maxResults,
+        signal: options?.signal
+      });
+    }
+  };
+  return api;
+}
+
 // src/host/rpc.ts
 var deepEqualJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 var settingsNamespace = (ns) => ns;
@@ -3106,6 +3226,12 @@ function apply(ctx, config) {
     resolveSessionPath: () => resolveGrokSessionPath(ctx),
     fetch: (input, init) => grokFetch(input, init)
   });
+  const grokNativeSearch = installGrokNativeSearch(ctx, {
+    runtime,
+    proxy: () => options().proxy
+  });
+  if (typeof ctx.provide === "function") ctx.provide(GROK_NATIVE_SEARCH_SERVICE, grokNativeSearch);
+  else ctx[GROK_NATIVE_SEARCH_SERVICE] = grokNativeSearch;
   const adapter = new GrokAdapter({
     options,
     resolveApiKey: () => resolveGrokAccessToken(runtime),
@@ -3268,6 +3394,7 @@ export {
   GROK_IMAGINE_MODEL,
   GROK_MODELS_ENDPOINT,
   GROK_MODELS_URL,
+  GROK_NATIVE_SEARCH_SERVICE,
   GROK_OAUTH_CLIENT_ID,
   GROK_OAUTH_ISSUER,
   GROK_OAUTH_SCOPE,
@@ -3319,11 +3446,13 @@ export {
   filterGrokThinkingStream,
   generateGrokImage,
   grokImageGenTool,
+  grokNativeWebSearch,
   grokResponsesApi,
   grokThinkingLevelMap,
   hasActiveProxy,
   inject,
   injectGrokServerSearchTools,
+  installGrokNativeSearch,
   isDisplayableThinking,
   isGrokPackedReasoning,
   isGrokRequest,
@@ -3334,6 +3463,7 @@ export {
   packGrokThinkingBlocks,
   parseGrokBilling,
   parseGrokModels,
+  parseGrokSearchSources,
   readAllAccountUsage,
   readGrokModels,
   readGrokUsage,

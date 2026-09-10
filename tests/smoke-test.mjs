@@ -82,4 +82,36 @@ assert.ok(
 );
 console.log("  Client Bundle wrapper: PASS");
 
+console.log("[test] 5. Parsing isolated Grok web_search Responses...");
+const parsed = hostModule.parseGrokSearchSources({
+  output: [
+    {
+      type: "web_search_call",
+      action: {
+        sources: [
+          { type: "url", url: "https://www.workbuddy.cn/docs/workbuddy/Overview" },
+          { type: "url", url: "https://cloud.tencent.com/product/workbuddy" }
+        ]
+      }
+    },
+    { type: "reasoning", id: "tco_hidden" },
+    {
+      content: [
+        {
+          type: "output_text",
+          text: "WorkBuddy 简介 | WorkBuddy - https://www.workbuddy.cn/docs/workbuddy/Overview",
+          annotations: [{ url: "https://cloud.tencent.com/product/workbuddy", title: "WorkBuddy" }]
+        }
+      ]
+    }
+  ]
+}, 8);
+assert.equal(parsed.sources.length, 2);
+assert.equal(parsed.sources[0].url, "https://www.workbuddy.cn/docs/workbuddy/Overview");
+assert.equal(parsed.sources[0].title, "WorkBuddy 简介 | WorkBuddy");
+assert.equal(parsed.sources[1].title, "WorkBuddy");
+assert.equal(parsed.truncated, false);
+assert.equal(hostModule.GROK_NATIVE_SEARCH_SERVICE, "grokNativeSearch");
+console.log("  Native search parser: PASS");
+
 console.log("\n[test] ALL SMOKE TESTS PASSED SUCCESSFULLY!");

@@ -177,6 +177,12 @@ import {
   mediaTypeOf
 } from "./image-gen.js";
 import { isLoopbackAddress, sendJson } from "./loopback.js";
+import {
+  GROK_NATIVE_SEARCH_SERVICE,
+  grokNativeWebSearch,
+  installGrokNativeSearch,
+  parseGrokSearchSources
+} from "./native-search.js";
 import { createGrokRpcHandler, saveDisplayedCatalog } from "./rpc.js";
 
 const DEFAULT_MAX_RETRIES = 2;
@@ -295,6 +301,12 @@ export function apply(ctx: any, config: any): void {
     resolveSessionPath: () => resolveGrokSessionPath(ctx),
     fetch: (input: any, init?: any) => grokFetch(input, init)
   });
+  const grokNativeSearch = installGrokNativeSearch(ctx, {
+    runtime,
+    proxy: () => options().proxy
+  });
+  if (typeof ctx.provide === "function") ctx.provide(GROK_NATIVE_SEARCH_SERVICE, grokNativeSearch);
+  else ctx[GROK_NATIVE_SEARCH_SERVICE] = grokNativeSearch;
 
   const adapter = new GrokAdapter({
     options,
@@ -445,6 +457,7 @@ export function apply(ctx: any, config: any): void {
 // Re-export every symbol that index.js previously exported
 export {
   DEFAULT_USAGE_REQUEST_TIMEOUT_MS,
+  GROK_NATIVE_SEARCH_SERVICE,
   GROK_4_5_REASONING_EFFORTS,
   GROK_4_6_REASONING_EFFORTS,
   GROK_AUTH_COMPLETE_ENDPOINT,
@@ -516,10 +529,12 @@ export {
   filterGrokThinkingStream,
   generateGrokImage,
   grokImageGenTool,
+  grokNativeWebSearch,
   grokResponsesApi,
   hasActiveProxy,
   grokThinkingLevelMap,
   injectGrokServerSearchTools,
+  installGrokNativeSearch,
   isDisplayableThinking,
   isGrokRequest,
   isGrokPackedReasoning,
@@ -528,6 +543,7 @@ export {
   officialEffortsFor,
   packGrokThinkingBlocks,
   parseGrokBilling,
+  parseGrokSearchSources,
   parseGrokModels,
   readAllAccountUsage,
   readGrokModels,

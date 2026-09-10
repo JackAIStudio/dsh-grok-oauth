@@ -18,6 +18,7 @@ DeepSeek Harness 自有、独立维护的 **Grok (xAI) 供应商插件**。
 - **本机 HTTP 快照** `GET /dsh-grok-oauth/usage`(仅 loopback):给 `dsh-mobile-plus` 等主机侧消费者读同一份无密钥额度,不把 token 带出 Host。
 - 模型元数据(grok-4.x)与推理档位沿用。
 - **工具循环走 DSH 原生工具(默认)**:不再默认注入 Grok 服务端 web_search / x_search(其结果为加密 tco_* 项、只在下一请求回放,agent 循环拿不到结果,会导致模型写一句计划就停下)。需要 Grok Build 风格服务端搜索时,在设置卡「能力」开启「Grok 服务端搜索(实验)」。
+- **独立网页搜索**(`ctx.grokNativeSearch`, 0.1.8):另开一轮 Responses + `web_search`,只解析明文 `web_search_call.action.sources`,丢掉 `tco_*`。给 `dsh-web-search-follow` 当当前模型是 Grok 时的搜索后端,不进入主对话工具循环。
 
 ## 常见网络环境
 
