@@ -1,6 +1,6 @@
 {
   "name": "dsh-grok-oauth",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "description": "Independent, locally-owned Grok (xAI) provider for DeepSeek Harness: xAI subscription OAuth (PKCE) login, chat, usage, and optional Grok Imagine. A stable fork of the upstream dsh-llm-grok approach with a cross-platform browser opener. Not tied to the upstream GitHub repo, so upstream updates cannot overwrite local fixes.",
   "type": "module",

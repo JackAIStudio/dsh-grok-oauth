@@ -68,6 +68,18 @@ assert.ok(
   clientContent.includes('dsh-grok-oauth/usage-dock.css'),
   "client.js must contain dock CSS"
 );
+assert.ok(
+  clientContent.includes("tool.call.toolview"),
+  "client.js must register tool.call.toolview"
+);
+assert.ok(
+  clientContent.includes("grok_image_gen"),
+  "client.js must register the grok_image_gen tool row"
+);
+assert.ok(
+  clientContent.includes("dsh-grok-oauth/image-row.css"),
+  "client.js must contain image-row CSS"
+);
 console.log("  Client Bundle wrapper: PASS");
 
 console.log("\n[test] ALL SMOKE TESTS PASSED SUCCESSFULLY!");

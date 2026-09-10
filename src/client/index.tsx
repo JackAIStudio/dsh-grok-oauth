@@ -30,6 +30,7 @@ import { en, zh } from "./locales.js";
 import { BrandMark } from "./components/BrandMark.js";
 import { GrokModelPicker, GrokModelPickerController } from "./components/GrokModelPicker.js";
 import { GrokPluginCard } from "./components/GrokPluginCard.js";
+import { registerGrokImageToolview } from "./components/GrokImageRow.js";
 import {
   GrokUsageChip,
   loadGrokUsage,
@@ -49,7 +50,7 @@ import {
 
 export const name = "dsh-llm-grok-client";
 
-export const inject = ["slots", "locale", "connection", "settingsScope"];
+export const inject = ["slots", "locale", "connection", "settingsScope", "uiConversation"];
 
 export function apply(ctx: any) {
   const localeNamespace = "settings.grok";
@@ -388,16 +389,17 @@ function registerGrokSettingsNavIcon(getLabel?: () => string): () => void {
     )
   );
 
+  registerGrokImageToolview(ctx, localeNamespace);
+
   ctx.slots.inject("conversation.composer.dock", () =>
     ctx.slots.register(
       {
         name: "conversation.composer.dock",
         id: "dsh-grok-oauth-usage",
-        order: -9,
-        label: () => t("usageWindowSuperGrok"),
-        inject: () => ({ t, seat: "dock" })
+        order: -8,
+        label: () => t("usageWindowSuperGrok")
       },
-      GrokUsageChip
+      (props: any) => <GrokUsageChip {...props} seat="dock" t={t} />
     )
   );
 
@@ -406,11 +408,10 @@ function registerGrokSettingsNavIcon(getLabel?: () => string): () => void {
       {
         name: "conversation.input.dock",
         id: "dsh-grok-oauth-usage-hero",
-        order: 51,
-        label: () => t("usageWindowSuperGrok"),
-        inject: () => ({ t, seat: "hero" })
+        order: 52,
+        label: () => t("usageWindowSuperGrok")
       },
-      GrokUsageChip
+      (props: any) => <GrokUsageChip {...props} seat="hero" t={t} />
     )
   );
 

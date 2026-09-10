@@ -167,7 +167,18 @@ export function grokUsageTitle(usage: GrokUsageView, t: (key: keyof LocaleDict) 
 }
 
 function isBlankComposer(useSession: any) {
-  return typeof useSession === "function" && useSession((s: any) => s.composerPhase) === "blank";
+  if (typeof document !== "undefined") {
+    const phase = document.querySelector("[data-phase]")?.getAttribute("data-phase");
+    if (phase === "hero" || phase === "settling") return true;
+    if (phase === "active") return false;
+  }
+  if (typeof useSession !== "function") return true;
+  const snap = useSession((s: any) => s);
+  if (snap && typeof snap === "object") {
+    if (snap.composerPhase === "blank") return true;
+    if (snap.blank === true && snap.promptAttempted !== true) return true;
+  }
+  return false;
 }
 
 export interface GrokUsageChipProps {
@@ -177,11 +188,17 @@ export interface GrokUsageChipProps {
 }
 
 export function GrokUsageChip(props: GrokUsageChipProps) {
-  const t = props.t;
+  const t = props.t ?? ((key: any) => (key === "dockUsed" ? "{percent}% 已用" : key));
   const blank = isBlankComposer(props.useSession);
   const snapshot = useGrokUsageStore();
   const running = typeof props.useSession === "function" ? props.useSession((s: any) => s.running) : false;
   const prevRunning = useRef(running);
+
+  useEffect(() => {
+    if (snapshot.status === "idle" || (snapshot.usage === undefined && grokUsageLast === undefined)) {
+      void loadGrokUsage(true);
+    }
+  }, [snapshot.status]);
 
   useEffect(() => {
     if (prevRunning.current === true && running === false) loadGrokUsage(true);
@@ -190,11 +207,36 @@ export function GrokUsageChip(props: GrokUsageChipProps) {
 
   if ((props.seat === "hero") !== blank) return null;
   const usage = snapshot.usage ?? grokUsageLast;
-  if (usage === undefined) return null;
+  if (usage === undefined) {
+    if (snapshot.status === "loading" || snapshot.status === "idle") {
+      return (
+        <div className="grok-usage-dock">
+          <button
+            type="button"
+            className="grok-usage is-loading"
+            title="Grok 额度查询中..."
+            aria-label="Grok 额度查询中..."
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              void loadGrokUsage(true);
+            }}
+          >
+            <span className="grok-usage-mark">
+              <BrandMark size={12} />
+            </span>
+            <span className="grok-usage-amount">...</span>
+          </button>
+        </div>
+      );
+    }
+    return null;
+  }
   const used = officialUsedPercent(usage);
   if (used === undefined) return null;
 
-  const loading = snapshot.status === "loading" || snapshot.status === "idle";
+  const loading = snapshot.status === "loading";
   const kind = used >= GROK_USAGE_ALERT ? "alert" : used >= GROK_USAGE_WARN ? "warn" : "ready";
   const className = [
     "grok-usage",
@@ -204,16 +246,21 @@ export function GrokUsageChip(props: GrokUsageChipProps) {
   ]
     .filter(Boolean)
     .join(" ");
-  const amount = t("dockUsed").replace("{percent}", String(used));
+  const amount = (typeof t === "function" ? t("dockUsed") : "{percent}% 已用").replace("{percent}", String(used));
 
   return (
     <div className="grok-usage-dock">
       <button
         type="button"
         className={className}
-        title={grokUsageTitle(usage, t)}
-        aria-label={`${t("usageWindowSuperGrok")} ${amount}`}
-        onClick={() => loadGrokUsage(true)}
+        title={typeof t === "function" ? grokUsageTitle(usage, t) : `Grok ${amount}`}
+        aria-label={`${typeof t === "function" ? t("usageWindowSuperGrok") : "SuperGrok"} ${amount}`}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          loadGrokUsage(true);
+        }}
       >
         <span className="grok-usage-mark">
           <BrandMark size={12} />

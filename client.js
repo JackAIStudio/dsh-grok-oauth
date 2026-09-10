@@ -91,6 +91,7 @@ var GROK_CATALOG = Object.freeze([
 ]);
 var GROK_MODELS_ENDPOINT = "models/list";
 var GROK_SAVE_ENDPOINT = "settings/save";
+var GROK_IMAGE_GEN_TOOL_NAME = "grok_image_gen";
 
 // src/common/contract.ts
 function isRecord(value) {
@@ -483,6 +484,15 @@ var en = {
   capabilities: "Capabilities",
   enableImageGen: "Enable grok_image_gen tool",
   enableImageGenHelp: "Lets any conversation model draw with Grok Imagine using this SuperGrok login. Distinct from Codex codex_generate_image.",
+  imageRowTitle: "Grok image",
+  imageRowRunning: "Generating",
+  imageRowFailed: "Generation failed",
+  imageRowOpen: "View original",
+  imageRowOpenNamed: "View {name}",
+  imageRowLoading: "Loading",
+  imageRowLoadFailed: "Couldn't load. Click to retry",
+  imageRowLightboxClose: "Close",
+  imageRowOpenFile: "Open file",
   serverSearch: "Grok server-side search (experimental)",
   serverSearchHelp: "Injects Grok\u2019s own web_search / x_search. Results come back encrypted and are only replayed on the next request, so keep off to let Grok use DSH\u2019s own tools in the agent loop; turn on only if you rely on the Grok Build-style server search.",
   network: "Network",
@@ -577,6 +587,15 @@ var zh = {
   capabilities: "\u80FD\u529B",
   enableImageGen: "\u542F\u7528 grok_image_gen \u5DE5\u5177",
   enableImageGenHelp: "\u8BA9\u4EFB\u610F\u4F1A\u8BDD\u6A21\u578B\u7528\u672C\u5361\u7684 SuperGrok \u767B\u5F55\u8C03\u7528 Grok Imagine \u751F\u56FE\u3002\u4E0E Codex \u7684 codex_generate_image \u4E0D\u540C\u540D\u3002",
+  imageRowTitle: "Grok \u751F\u56FE",
+  imageRowRunning: "\u6B63\u5728\u751F\u6210",
+  imageRowFailed: "\u751F\u6210\u5931\u8D25",
+  imageRowOpen: "\u67E5\u770B\u5927\u56FE",
+  imageRowOpenNamed: "\u67E5\u770B {name}",
+  imageRowLoading: "\u52A0\u8F7D\u4E2D",
+  imageRowLoadFailed: "\u52A0\u8F7D\u5931\u8D25\uFF0C\u70B9\u51FB\u91CD\u8BD5",
+  imageRowLightboxClose: "\u5173\u95ED",
+  imageRowOpenFile: "\u6253\u5F00\u6587\u4EF6",
   serverSearch: "Grok \u670D\u52A1\u7AEF\u641C\u7D22\uFF08\u5B9E\u9A8C\uFF09",
   serverSearchHelp: "\u6CE8\u5165 Grok \u81EA\u5E26\u7684 web_search / x_search\u3002\u641C\u7D22\u7ED3\u679C\u4EE5\u52A0\u5BC6\u9879\u56DE\u4F20\u4E14\u53EA\u5728\u4E0B\u4E00\u8BF7\u6C42\u56DE\u653E\uFF0Cagent \u5FAA\u73AF\u62FF\u4E0D\u5230\u7ED3\u679C\uFF1B\u5EFA\u8BAE\u4FDD\u6301\u5173\u95ED\uFF0C\u8BA9 Grok \u8D70 DSH \u81EA\u5DF1\u7684\u5DE5\u5177\u5FAA\u73AF\u3002\u4EC5\u5F53\u4F60\u4F9D\u8D56 Grok Build \u98CE\u683C\u7684\u670D\u52A1\u7AEF\u641C\u7D22\u65F6\u5F00\u542F\u3002",
   network: "\u7F51\u7EDC",
@@ -1830,24 +1849,63 @@ function grokUsageTitle(usage, t) {
   return parts.join("\n");
 }
 function isBlankComposer(useSession) {
-  return typeof useSession === "function" && useSession((s) => s.composerPhase) === "blank";
+  if (typeof document !== "undefined") {
+    const phase = document.querySelector("[data-phase]")?.getAttribute("data-phase");
+    if (phase === "hero" || phase === "settling") return true;
+    if (phase === "active") return false;
+  }
+  if (typeof useSession !== "function") return true;
+  const snap = useSession((s) => s);
+  if (snap && typeof snap === "object") {
+    if (snap.composerPhase === "blank") return true;
+    if (snap.blank === true && snap.promptAttempted !== true) return true;
+  }
+  return false;
 }
 function GrokUsageChip(props) {
-  const t = props.t;
+  const t = props.t ?? ((key) => key === "dockUsed" ? "{percent}% \u5DF2\u7528" : key);
   const blank = isBlankComposer(props.useSession);
   const snapshot = useGrokUsageStore();
   const running = typeof props.useSession === "function" ? props.useSession((s) => s.running) : false;
   const prevRunning = (0, import_react2.useRef)(running);
+  (0, import_react2.useEffect)(() => {
+    if (snapshot.status === "idle" || snapshot.usage === void 0 && grokUsageLast === void 0) {
+      void loadGrokUsage(true);
+    }
+  }, [snapshot.status]);
   (0, import_react2.useEffect)(() => {
     if (prevRunning.current === true && running === false) loadGrokUsage(true);
     prevRunning.current = running;
   }, [running]);
   if (props.seat === "hero" !== blank) return null;
   const usage = snapshot.usage ?? grokUsageLast;
-  if (usage === void 0) return null;
+  if (usage === void 0) {
+    if (snapshot.status === "loading" || snapshot.status === "idle") {
+      return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { className: "grok-usage-dock", children: /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(
+        "button",
+        {
+          type: "button",
+          className: "grok-usage is-loading",
+          title: "Grok \u989D\u5EA6\u67E5\u8BE2\u4E2D...",
+          "aria-label": "Grok \u989D\u5EA6\u67E5\u8BE2\u4E2D...",
+          onMouseDown: (e) => e.preventDefault(),
+          onClick: (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            void loadGrokUsage(true);
+          },
+          children: [
+            /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "grok-usage-mark", children: /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(BrandMark, { size: 12 }) }),
+            /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "grok-usage-amount", children: "..." })
+          ]
+        }
+      ) });
+    }
+    return null;
+  }
   const used = officialUsedPercent(usage);
   if (used === void 0) return null;
-  const loading = snapshot.status === "loading" || snapshot.status === "idle";
+  const loading = snapshot.status === "loading";
   const kind = used >= GROK_USAGE_ALERT ? "alert" : used >= GROK_USAGE_WARN ? "warn" : "ready";
   const className = [
     "grok-usage",
@@ -1855,15 +1913,20 @@ function GrokUsageChip(props) {
     kind === "warn" ? "is-warn" : "",
     kind === "alert" ? "is-alert" : ""
   ].filter(Boolean).join(" ");
-  const amount = t("dockUsed").replace("{percent}", String(used));
+  const amount = (typeof t === "function" ? t("dockUsed") : "{percent}% \u5DF2\u7528").replace("{percent}", String(used));
   return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { className: "grok-usage-dock", children: /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(
     "button",
     {
       type: "button",
       className,
-      title: grokUsageTitle(usage, t),
-      "aria-label": `${t("usageWindowSuperGrok")} ${amount}`,
-      onClick: () => loadGrokUsage(true),
+      title: typeof t === "function" ? grokUsageTitle(usage, t) : `Grok ${amount}`,
+      "aria-label": `${typeof t === "function" ? t("usageWindowSuperGrok") : "SuperGrok"} ${amount}`,
+      onMouseDown: (e) => e.preventDefault(),
+      onClick: (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        loadGrokUsage(true);
+      },
       children: [
         /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "grok-usage-mark", children: /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(BrandMark, { size: 12 }) }),
         /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "grok-usage-amount", children: amount })
@@ -2997,8 +3060,229 @@ function GrokPluginCard(props) {
   ] });
 }
 
-// src/client/components/GrokAuthSection.tsx
+// src/client/components/GrokImageRow.tsx
+var import_react4 = require("react");
 var import_jsx_runtime9 = require("react/jsx-runtime");
+var cssId = "dsh-grok-oauth/image-row.css";
+var css = [
+  ".grok-image-row{display:flex;flex-direction:column;gap:8px;min-width:0}",
+  ".grok-image-row-head{display:flex;align-items:center;min-width:0;height:24px}",
+  ".grok-image-row-lead{width:16px;height:16px;flex:none;margin-right:6px;color:var(--dsw-alias-label-tertiary);display:inline-flex;align-items:center;justify-content:center}",
+  ".grok-image-row-title{flex:none;color:var(--dsw-alias-label-secondary);font-size:14px;line-height:24px}",
+  ".grok-image-row-sep{width:2px;height:2px;flex:none;margin:0 8px;border-radius:1px;background:var(--dsw-alias-label-caption)}",
+  ".grok-image-row-summary{min-width:0;flex:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:14px;line-height:24px}",
+  ".grok-image-row-summary.is-error{color:var(--dsw-alias-state-error-primary)}",
+  ".grok-image-row-path{appearance:none;border:0;padding:0;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;text-align:left;cursor:pointer;text-decoration:underline;text-underline-offset:2px}",
+  ".grok-image-row-path:hover,.grok-image-row-path:focus-visible{color:var(--dsw-alias-label-primary);outline:none}",
+  ".grok-image-gallery{display:flex;flex-wrap:wrap;gap:10px;max-width:100%}",
+  ".grok-image-frame{appearance:none;border:.5px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-interactive-bg-hover);cursor:zoom-in;border-radius:16px;flex:none;min-width:44px;min-height:44px;padding:0;display:grid;place-items:center;overflow:hidden}",
+  ".grok-image-frame img{width:100%;height:100%;object-fit:cover;display:block}",
+  ".grok-image-frame.is-tile{width:64px;min-width:64px;height:64px;min-height:64px}",
+  ".grok-image-frame.is-loading,.grok-image-frame.is-error{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}",
+  ".grok-image-frame.is-error{background:var(--dsw-alias-interactive-bg-hover-danger);cursor:pointer;max-width:240px;padding:10px 12px}",
+  ".grok-image-lightbox{position:fixed;inset:0;z-index:80;display:grid;place-items:center;background:color-mix(in srgb, var(--dsw-alias-bg-base) 72%, transparent);padding:24px}",
+  ".grok-image-lightbox img{max-width:min(100vw - 48px, 1200px);max-height:min(100vh - 48px, 90vh);object-fit:contain;border-radius:12px;box-shadow:0 16px 48px color-mix(in srgb, #000 45%, transparent)}",
+  ".grok-image-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}"
+].join("");
+if (typeof document !== "undefined") {
+  let tag = document.querySelector(`style[data-plugin-css="${cssId}"]`);
+  if (tag === null) {
+    tag = document.createElement("style");
+    tag.dataset.plugin = "dsh-grok-oauth";
+    tag.dataset.pluginCss = cssId;
+    document.head.appendChild(tag);
+  }
+  tag.textContent = css;
+}
+function firstLine(text) {
+  const newline = text.indexOf("\n");
+  return newline === -1 ? text : text.slice(0, newline);
+}
+function parseArgs(argsRaw) {
+  try {
+    const value = JSON.parse(argsRaw);
+    return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function callArgsRaw(block) {
+  return ("kind" in block ? block.call?.argsRaw : block.argsRaw) ?? "";
+}
+function imagesOf(block) {
+  if (block == null || !("kind" in block) || !Array.isArray(block.content)) return [];
+  const images = [];
+  for (const item of block.content) {
+    if (item?.type === "image" && item.attachment?.attachmentId) images.push(item.attachment);
+  }
+  return images;
+}
+function pathOf(block) {
+  const args = parseArgs(callArgsRaw(block));
+  if (typeof args?.path === "string" && args.path.trim() !== "") return args.path.trim();
+  if (block == null || !("kind" in block) || !Array.isArray(block.content)) return void 0;
+  for (const item of block.content) {
+    if (item?.type !== "text" || typeof item.text !== "string") continue;
+    const match = item.text.match(/<path>([^<]+)<\/path>/);
+    if (match?.[1]?.trim()) return match[1].trim();
+  }
+  return void 0;
+}
+function promptOf(block) {
+  const args = parseArgs(callArgsRaw(block));
+  return typeof args?.prompt === "string" ? firstLine(args.prompt) : "";
+}
+function rowState(block) {
+  if (block == null || !("kind" in block)) return "running";
+  if (block.error?.code === "interrupted") return "stopped";
+  if (block.isError) return "error";
+  return "ok";
+}
+function singleFit(width, height) {
+  if (width == null || height == null || width <= 0 || height <= 0) {
+    return { width: 240, height: 240, objectPosition: "center" };
+  }
+  const natural = width / height;
+  const ratio = Math.min(4, Math.max(0.25, natural));
+  const box = ratio >= 1 ? { width: 240, height: 240 / ratio } : { width: 240 * ratio, height: 240 };
+  const scale = Math.min(1, width / box.width, height / box.height);
+  return {
+    width: Math.max(1, Math.round(box.width * scale)),
+    height: Math.max(1, Math.round(box.height * scale)),
+    objectPosition: natural < 0.25 ? "center top" : natural > 4 ? "left center" : "center"
+  };
+}
+function GrokImageThumb({
+  attachment,
+  loadImage,
+  tile,
+  t
+}) {
+  const [src, setSrc] = (0, import_react4.useState)(() => loadImage?.peek?.(attachment) ?? null);
+  const [error, setError] = (0, import_react4.useState)(false);
+  const [open, setOpen] = (0, import_react4.useState)(false);
+  const [attempt, setAttempt] = (0, import_react4.useState)(0);
+  const fit = (0, import_react4.useMemo)(
+    () => tile ? void 0 : singleFit(attachment.width, attachment.height),
+    [attachment.height, attachment.width, tile]
+  );
+  const name2 = typeof attachment.name === "string" && attachment.name !== "" ? attachment.name : t("imageRowTitle");
+  (0, import_react4.useEffect)(() => {
+    if (loadImage == null) {
+      setError(true);
+      return;
+    }
+    let live = true;
+    setError(false);
+    setSrc(loadImage.peek?.(attachment) ?? null);
+    loadImage(attachment).then((url) => {
+      if (live) setSrc(url);
+    }).catch(() => {
+      if (live) setError(true);
+    });
+    return () => {
+      live = false;
+    };
+  }, [attachment, attempt, loadImage]);
+  if (error) {
+    return /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("button", { type: "button", className: "grok-image-frame is-error", onClick: () => setAttempt((n) => n + 1), children: t("imageRowLoadFailed") });
+  }
+  return /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)(import_jsx_runtime9.Fragment, { children: [
+    /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
+      "button",
+      {
+        type: "button",
+        className: tile ? "grok-image-frame is-tile" : "grok-image-frame",
+        style: fit === void 0 ? void 0 : { width: fit.width, height: fit.height },
+        title: t("imageRowOpen"),
+        "aria-label": formatTemplate(t("imageRowOpenNamed"), { name: name2 }),
+        onClick: () => {
+          if (src !== null) setOpen(true);
+        },
+        children: src === null ? /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("span", { className: "grok-image-frame is-loading", children: t("imageRowLoading") }) : /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("img", { src, alt: name2, style: fit === void 0 ? void 0 : { objectPosition: fit.objectPosition } })
+      }
+    ),
+    open && src !== null ? /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(GrokImageLightbox, { src, alt: name2, closeLabel: t("imageRowLightboxClose"), onClose: () => setOpen(false) }) : null
+  ] });
+}
+function GrokImageLightbox({
+  src,
+  alt,
+  closeLabel,
+  onClose
+}) {
+  (0, import_react4.useEffect)(() => {
+    const onKey = (event) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("button", { type: "button", className: "grok-image-lightbox", "aria-label": closeLabel, onClick: onClose, children: /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("img", { src, alt, onClick: (event) => event.stopPropagation() }) });
+}
+function GrokImageRow({
+  block,
+  openFile,
+  loadImage,
+  t
+}) {
+  const state = rowState(block);
+  const images = imagesOf(block);
+  const filePath = pathOf(block);
+  const prompt = promptOf(block);
+  const summary = state === "error" ? t("imageRowFailed") : state === "running" ? t("imageRowRunning") : prompt || filePath || t("imageRowTitle");
+  const tile = images.length > 1;
+  const openSaved = (0, import_react4.useCallback)(
+    (event) => {
+      event.stopPropagation();
+      if (filePath !== void 0) openFile?.(filePath);
+    },
+    [filePath, openFile]
+  );
+  return /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("div", { className: "grok-image-row", "data-tool": GROK_IMAGE_GEN_TOOL_NAME, "data-state": state, children: [
+    state !== "ok" ? /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("span", { className: "grok-image-sr", children: state === "running" ? t("imageRowRunning") : t("imageRowFailed") }) : null,
+    /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("div", { className: "grok-image-row-head", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("span", { className: "grok-image-row-lead", children: /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(BrandMark, { size: 14 }) }),
+      /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("span", { className: "grok-image-row-title", children: t("imageRowTitle") }),
+      /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("span", { className: "grok-image-row-sep", "aria-hidden": "true" }),
+      /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("span", { className: state === "error" ? "grok-image-row-summary is-error" : "grok-image-row-summary", children: summary })
+    ] }),
+    images.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("div", { className: "grok-image-gallery", children: images.map((attachment, index) => /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
+      GrokImageThumb,
+      {
+        attachment,
+        loadImage,
+        tile,
+        t
+      },
+      `${attachment.attachmentId}:${index}`
+    )) }) : null,
+    filePath !== void 0 && openFile !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("button", { type: "button", className: "grok-image-row-path", onClick: openSaved, title: filePath, children: t("imageRowOpenFile") }) : null
+  ] });
+}
+function registerGrokImageToolview(ctx, localeNamespace) {
+  ctx.slots.inject(
+    "tool.call.toolview",
+    () => ctx.slots.register(
+      {
+        name: "tool.call.toolview",
+        key: GROK_IMAGE_GEN_TOOL_NAME,
+        locale: localeNamespace,
+        inject: (sessionId) => {
+          const ui = ctx.uiConversation;
+          if (ui == null) return {};
+          const loadImage = ((attachment) => ui.imageUrl(sessionId, attachment));
+          loadImage.peek = (attachment) => ui.peekImageUrl(sessionId, attachment);
+          return { loadImage };
+        }
+      },
+      GrokImageRow
+    )
+  );
+}
+
+// src/client/components/GrokAuthSection.tsx
+var import_jsx_runtime10 = require("react/jsx-runtime");
 var GROK_AUTH_SECTION_ID = "grok-oauth-login";
 var GROK_AUTH_ITEM_SLOT = "settings.grok.auth";
 var GROK_AUTH_LOCALE_NS = "settings.grok-auth";
@@ -3042,19 +3326,19 @@ function GrokAuthSection(props) {
   const t = props.t ?? ((key) => key);
   const renderSlot = props.renderSlot;
   const node = renderSlot?.(GROK_AUTH_ITEM_SLOT, {}, { entryKey: GROK_SETTINGS_NAMESPACE });
-  return /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("div", { "data-grok-auth-section": GROK_AUTH_LOCALE_NS, style: pageStyle, children: [
-    /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("header", { children: [
-      /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("h2", { style: titleStyle2, children: t("title") }),
-      /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { style: subtitleStyle, children: t("subtitle") })
+  return /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("div", { "data-grok-auth-section": GROK_AUTH_LOCALE_NS, style: pageStyle, children: [
+    /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("header", { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("h2", { style: titleStyle2, children: t("title") }),
+      /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("p", { style: subtitleStyle, children: t("subtitle") })
     ] }),
     node == null ? null : node
   ] });
 }
 
 // src/client/index.tsx
-var import_jsx_runtime10 = require("react/jsx-runtime");
+var import_jsx_runtime11 = require("react/jsx-runtime");
 var name = "dsh-llm-grok-client";
-var inject = ["slots", "locale", "connection", "settingsScope"];
+var inject = ["slots", "locale", "connection", "settingsScope", "uiConversation"];
 function apply(ctx) {
   const localeNamespace = "settings.grok";
   ctx.effect(
@@ -3337,7 +3621,7 @@ function apply(ctx) {
             id: GROK_AUTH_SECTION_ID,
             order: 11,
             label: () => t2("nav"),
-            icon: /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(BrandMark, { size: 14 }),
+            icon: /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(BrandMark, { size: 14 }),
             locale: GROK_AUTH_LOCALE_NS,
             children: {
               [GROK_AUTH_ITEM_SLOT]: {
@@ -3372,17 +3656,17 @@ function apply(ctx) {
       GrokPluginCard
     )
   );
+  registerGrokImageToolview(ctx, localeNamespace);
   ctx.slots.inject(
     "conversation.composer.dock",
     () => ctx.slots.register(
       {
         name: "conversation.composer.dock",
         id: "dsh-grok-oauth-usage",
-        order: -9,
-        label: () => t("usageWindowSuperGrok"),
-        inject: () => ({ t, seat: "dock" })
+        order: -8,
+        label: () => t("usageWindowSuperGrok")
       },
-      GrokUsageChip
+      (props) => /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(GrokUsageChip, { ...props, seat: "dock", t })
     )
   );
   ctx.slots.inject(
@@ -3391,11 +3675,10 @@ function apply(ctx) {
       {
         name: "conversation.input.dock",
         id: "dsh-grok-oauth-usage-hero",
-        order: 51,
-        label: () => t("usageWindowSuperGrok"),
-        inject: () => ({ t, seat: "hero" })
+        order: 52,
+        label: () => t("usageWindowSuperGrok")
       },
-      GrokUsageChip
+      (props) => /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(GrokUsageChip, { ...props, seat: "hero", t })
     )
   );
   const cleanupGrokNavIcon = registerGrokSettingsNavIcon();

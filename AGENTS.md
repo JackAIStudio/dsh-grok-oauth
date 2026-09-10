@@ -61,7 +61,8 @@ src/
         ├── GrokModelPicker.tsx # 账户模型同步与选择弹窗
         ├── UsageChip.tsx    # 对话框/底部状态栏额度胶囊
         ├── GrokAuthSection.tsx # 设置页独立导航
-        └── GrokPluginCard.tsx  # 设置页主交互卡片
+        ├── GrokPluginCard.tsx  # 设置页主交互卡片
+        └── GrokImageRow.tsx    # grok_image_gen 会话缩略图 / 大图灯箱
 ```
 
 ---
