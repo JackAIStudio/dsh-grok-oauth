@@ -2630,6 +2630,7 @@ function createGrokPiAiProfile(connection) {
     requestImageMaxBytes: 1048576,
     piProvider,
     configuredMaxTokens,
+    modelErrors: /* @__PURE__ */ new Map(),
     headers
   };
 }
