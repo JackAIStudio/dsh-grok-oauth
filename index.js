@@ -3256,7 +3256,7 @@ function apply(ctx, config) {
     registeredPolicy = policy;
   };
   const grokRpc = createGrokRpcHandler(runtime);
-  ctx.inject(["connection"], (connectionCtx) => {
+  ctx.inject(["connection", "webServer"], (connectionCtx) => {
     connectionCtx.connection.rpc.handle(
       GROK_RPC_CHANNEL,
       async (endpoint, payload, signal) => {

@@ -333,7 +333,7 @@ export function apply(ctx: any, config: any): void {
   };
 
   const grokRpc = createGrokRpcHandler(runtime);
-  ctx.inject(["connection"], (connectionCtx: any) => {
+  ctx.inject(["connection", "webServer"], (connectionCtx: any) => {
     connectionCtx.connection.rpc.handle(
       GROK_RPC_CHANNEL,
       async (endpoint: string, payload: unknown, signal?: AbortSignal) => {
