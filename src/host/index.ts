@@ -334,14 +334,29 @@ export function apply(ctx: any, config: any): void {
 
   const grokRpc = createGrokRpcHandler(runtime);
   ctx.inject(["connection", "webServer"], (connectionCtx: any) => {
-    connectionCtx.connection.rpc.handle(
-      GROK_RPC_CHANNEL,
-      async (endpoint: string, payload: unknown, signal?: AbortSignal) => {
-        if (endpoint === "settings/save") return saveDisplayedCatalog(ctx, payload);
-        return grokRpc(endpoint, payload, signal);
-      },
-      { authority: "loopback" }
-    );
+    const rpcHandler = async (endpoint: string, payload: unknown, signal?: AbortSignal) => {
+      if (endpoint === "settings/save") return saveDisplayedCatalog(ctx, payload);
+      return grokRpc(endpoint, payload, signal);
+    };
+
+    try {
+      connectionCtx.connection.rpc.handle(
+        GROK_RPC_CHANNEL,
+        rpcHandler,
+        { authority: "loopback" }
+      );
+    } catch {
+      // ignore
+    }
+
+    // 兼容低版本底座（如 DSH 0.1.2 生产环境）
+    // 0.1.2 中 connection.rpc.handle 因 owner 缺少 webServer 而失效，需直接通过 connection.register(connectionCtx, ...) 挂载
+    const webServer = connectionCtx.get?.("webServer") ?? connectionCtx.webServer;
+    if (webServer && !webServer.prefixes?.has(GROK_RPC_CHANNEL)) {
+      if (typeof connectionCtx.connection?.register === "function") {
+        connectionCtx.connection.register(connectionCtx, GROK_RPC_CHANNEL, rpcHandler);
+      }
+    }
   });
 
   ctx.inject(["webServer"], (web: any) => {

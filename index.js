@@ -3257,14 +3257,24 @@ function apply(ctx, config) {
   };
   const grokRpc = createGrokRpcHandler(runtime);
   ctx.inject(["connection", "webServer"], (connectionCtx) => {
-    connectionCtx.connection.rpc.handle(
-      GROK_RPC_CHANNEL,
-      async (endpoint, payload, signal) => {
-        if (endpoint === "settings/save") return saveDisplayedCatalog(ctx, payload);
-        return grokRpc(endpoint, payload, signal);
-      },
-      { authority: "loopback" }
-    );
+    const rpcHandler = async (endpoint, payload, signal) => {
+      if (endpoint === "settings/save") return saveDisplayedCatalog(ctx, payload);
+      return grokRpc(endpoint, payload, signal);
+    };
+    try {
+      connectionCtx.connection.rpc.handle(
+        GROK_RPC_CHANNEL,
+        rpcHandler,
+        { authority: "loopback" }
+      );
+    } catch {
+    }
+    const webServer = connectionCtx.get?.("webServer") ?? connectionCtx.webServer;
+    if (webServer && !webServer.prefixes?.has(GROK_RPC_CHANNEL)) {
+      if (typeof connectionCtx.connection?.register === "function") {
+        connectionCtx.connection.register(connectionCtx, GROK_RPC_CHANNEL, rpcHandler);
+      }
+    }
   });
   ctx.inject(["webServer"], (web) => {
     const webServer = web.get("webServer");
