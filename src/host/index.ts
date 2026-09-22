@@ -311,7 +311,8 @@ export function apply(ctx: any, config: any): void {
   const adapter = new GrokAdapter({
     options,
     resolveApiKey: () => resolveGrokAccessToken(runtime),
-    resolveAttachments: () => ctx.get("attachments")
+    resolveAttachments: () => ctx.get("attachments"),
+    mapHostPath: hostPath => ctx.get("fs")?.processPathFromHostPath(hostPath)
   });
 
   ctx.llm.registerConfigurableProviders([

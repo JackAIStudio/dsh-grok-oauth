@@ -2026,6 +2026,7 @@ import * as piAi from "@earendil-works/pi-ai";
 import { createProvider } from "@earendil-works/pi-ai";
 import * as openAIResponses from "@earendil-works/pi-ai/api/openai-responses";
 import { LlmAdapter, LlmError, ReasoningEffortId } from "@deepseek-ai/dsh-llm";
+import * as dshLlm from "@deepseek-ai/dsh-llm";
 import { PiAiAdapter } from "@deepseek-ai/dsh-llm-pi-ai";
 
 // src/host/image-gen.ts
@@ -2488,6 +2489,7 @@ function grokImageGenTool(ctx, options) {
 }
 
 // src/host/adapter.ts
+var resolveImageAttachmentAccess2 = dshLlm.resolveImageAttachmentAccess;
 function openAIResponsesApi2() {
   if (typeof piAi.openAIResponsesApi === "function") {
     return piAi.openAIResponsesApi();
@@ -2738,7 +2740,11 @@ var GrokAdapter = class extends LlmAdapter {
       profiles: () => profiles,
       resolveApiKey: () => this.config.resolveApiKey(),
       auth: this.auth,
-      ...this.config.resolveAttachments === void 0 ? {} : { resolveAttachments: this.config.resolveAttachments }
+      ...this.config.resolveAttachments === void 0 ? {} : { resolveAttachments: this.config.resolveAttachments },
+      // Resolve the read-only execution-world path recorded beside every image
+      // handle. Omitting this silently downgrades the handle to metadata only,
+      // which made the agent go looking for its own attachment on disk.
+      ...this.config.mapHostPath === void 0 || resolveImageAttachmentAccess2 === void 0 ? {} : { resolveImageAccess: (attachments, ref) => resolveImageAttachmentAccess2(attachments, this.config.mapHostPath, ref) }
     };
     const adapter = new PiAiAdapter(adapterOptions);
     this.snapshot = {
@@ -3236,7 +3242,8 @@ function apply(ctx, config) {
   const adapter = new GrokAdapter({
     options,
     resolveApiKey: () => resolveGrokAccessToken(runtime),
-    resolveAttachments: () => ctx.get("attachments")
+    resolveAttachments: () => ctx.get("attachments"),
+    mapHostPath: (hostPath) => ctx.get("fs")?.processPathFromHostPath(hostPath)
   });
   ctx.llm.registerConfigurableProviders([
     {

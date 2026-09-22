@@ -2,8 +2,18 @@ import * as piAi from "@earendil-works/pi-ai";
 import { createProvider } from "@earendil-works/pi-ai";
 import * as openAIResponses from "@earendil-works/pi-ai/api/openai-responses";
 import { LlmAdapter, LlmError, ReasoningEffortId } from "@deepseek-ai/dsh-llm";
+import * as dshLlm from "@deepseek-ai/dsh-llm";
 import { PiAiAdapter } from "@deepseek-ai/dsh-llm-pi-ai";
 import { isRecord, type GrokCatalogModel } from "../common/contract.js";
+
+/**
+ * `resolveImageAttachmentAccess` only exists in newer dsh-llm builds. This
+ * plugin's peer range still admits builds that predate it, so resolve the
+ * helper at runtime and degrade to a metadata-only handle when it is absent
+ * rather than failing to load the whole plugin.
+ */
+const resolveImageAttachmentAccess: ((attachments: any, mapHostPath: (hostPath: string) => string | undefined, ref: any) => any) | undefined =
+  (dshLlm as any).resolveImageAttachmentAccess;
 
 function openAIResponsesApi() {
   if (typeof (piAi as any).openAIResponsesApi === "function") {
@@ -306,6 +316,16 @@ export interface GrokAdapterConfig {
   };
   resolveApiKey: () => Promise<string | undefined>;
   resolveAttachments?: any;
+  /**
+   * Map one absolute host path into the current tool execution world.
+   *
+   * Without this, PiAiAdapter cannot resolve a readable path for an attached
+   * image, so the model-facing handle degrades to metadata only and the agent
+   * has to hunt the attachment store on disk to see a picture that was already
+   * in its own context. Mirrors the wiring `dsh-llm-pi-ai` applies to its own
+   * adapter: `(hostPath) => ctx.get('fs')?.processPathFromHostPath(hostPath)`.
+   */
+  mapHostPath?: (hostPath: string) => string | undefined;
 }
 
 export class GrokAdapter extends LlmAdapter {
@@ -327,7 +347,13 @@ export class GrokAdapter extends LlmAdapter {
       profiles: () => profiles,
       resolveApiKey: () => this.config.resolveApiKey(),
       auth: this.auth,
-      ...(this.config.resolveAttachments === undefined ? {} : { resolveAttachments: this.config.resolveAttachments })
+      ...(this.config.resolveAttachments === undefined ? {} : { resolveAttachments: this.config.resolveAttachments }),
+      // Resolve the read-only execution-world path recorded beside every image
+      // handle. Omitting this silently downgrades the handle to metadata only,
+      // which made the agent go looking for its own attachment on disk.
+      ...(this.config.mapHostPath === undefined || resolveImageAttachmentAccess === undefined
+        ? {}
+        : { resolveImageAccess: (attachments: any, ref: any) => resolveImageAttachmentAccess!(attachments, this.config.mapHostPath!, ref) })
     };
     const adapter = new PiAiAdapter(adapterOptions as any);
     this.snapshot = {
