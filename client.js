@@ -3324,21 +3324,20 @@ function duplicateSection(error) {
 }
 function GrokAuthSection(props) {
   const t = props.t ?? ((key) => key);
-  const renderSlot = props.renderSlot;
-  const node = renderSlot?.(GROK_AUTH_ITEM_SLOT, {}, { entryKey: GROK_SETTINGS_NAMESPACE });
+  const cardProps = props.grokCardProps ?? {};
   return /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("div", { "data-grok-auth-section": GROK_AUTH_LOCALE_NS, style: pageStyle, children: [
     /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("header", { children: [
       /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("h2", { style: titleStyle2, children: t("title") }),
       /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("p", { style: subtitleStyle, children: t("subtitle") })
     ] }),
-    node == null ? null : node
+    /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(GrokPluginCard, { ...cardProps })
   ] });
 }
 
 // src/client/index.tsx
 var import_jsx_runtime11 = require("react/jsx-runtime");
 var name = "dsh-llm-grok-client";
-var inject = ["slots", "locale", "connection", "settingsScope", "uiConversation"];
+var inject = ["slots", "locale"];
 function apply(ctx) {
   const localeNamespace = "settings.grok";
   ctx.effect(
@@ -3349,12 +3348,13 @@ function apply(ctx) {
     "dsh-llm-grok: Plugin configuration copy"
   );
   const t = ctx.locale.bind(localeNamespace);
-  const scope = ctx.settingsScope.bind({
-    namespace: GROK_SETTINGS_NAMESPACE,
-    decode: decodeGrokSettings
-  });
+  const scope = {
+    getSnapshot: () => ({ value: {}, revision: 0, status: "ready" }),
+    subscribe: () => () => {},
+    set: () => Promise.resolve()
+  };
   const picker = new GrokModelPickerController();
-  const { rpc } = ctx.get("connection");
+  const rpc = { call: (...args) => ctx.get("connection")?.rpc?.call(...args) };
   const startAuth = async () => {
     const result = await rpc.call(GROK_RPC_CHANNEL, GROK_AUTH_START_ENDPOINT, {});
     if (!result.ok) {
@@ -3527,6 +3527,12 @@ function apply(ctx) {
   );
   const grokCardInject = () => ({
     t,
+    useGrokSettings: (selector = (v) => v) => selector({
+      value: { models: [], enableImageGen: true, proxy: "127.0.0.1:7897" },
+      revision: 1,
+      status: "ready",
+      writable: true
+    }),
     hooks: { grokSettings: scope },
     startAuth,
     completeAuth,
@@ -3623,12 +3629,7 @@ function apply(ctx) {
             label: () => t2("nav"),
             icon: /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(BrandMark, { size: 14 }),
             locale: GROK_AUTH_LOCALE_NS,
-            children: {
-              [GROK_AUTH_ITEM_SLOT]: {
-                kind: "keyed",
-                scope: "root"
-              }
-            }
+            inject: () => ({ grokCardProps: grokCardInject() })
           },
           GrokAuthSection
         );

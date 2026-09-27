@@ -50,7 +50,7 @@ import {
 
 export const name = "dsh-llm-grok-client";
 
-export const inject = ["slots", "locale", "connection", "settingsScope", "uiConversation"];
+export const inject = ["slots", "locale", "connection", "uiConversation"];
 
 export function apply(ctx: any) {
   const localeNamespace = "settings.grok";
@@ -63,10 +63,14 @@ export function apply(ctx: any) {
     "dsh-llm-grok: Plugin configuration copy"
   );
   const t = ctx.locale.bind(localeNamespace);
-  const scope = ctx.settingsScope.bind({
+  const scope = ctx.settingsScope ? ctx.settingsScope.bind({
     namespace: GROK_SETTINGS_NAMESPACE,
     decode: decodeGrokSettings
-  });
+  }) : {
+    getSnapshot: () => ({ value: {}, revision: 0, status: "ready" }),
+    subscribe: () => () => {},
+    set: () => Promise.resolve()
+  };
   const picker = new GrokModelPickerController();
   const { rpc } = ctx.get("connection");
 
