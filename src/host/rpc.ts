@@ -8,7 +8,7 @@ import {
 } from "../common/contract.js";
 const deepEqualJson = (a: any, b: any) => JSON.stringify(a) === JSON.stringify(b);
 const settingsNamespace = (ns: string) => ns as any;
-import { GROK_SETTINGS_NAMESPACE } from "../common/constants.js";
+import { GROK_CATALOG, GROK_DEFAULT_STREAM_IDLE_TIMEOUT_MS, GROK_SETTINGS_NAMESPACE } from "../common/constants.js";
 import {
   completePkceLogin,
   ensureFreshAccounts,
@@ -162,7 +162,65 @@ export function createGrokRpcHandler(runtime: FullGrokAuthRuntime, options?: { m
   };
 }
 
-export async function saveDisplayedCatalog(ctx: any, payload: unknown): Promise<{ ok: true; value: GrokSaveResult } | { ok: false; error: any }> {
+export function readDisplayedSettings(ctx: any, options?: () => any) {
+  try {
+    const settings = ctx.get("settings");
+    const descriptor = settings?.describe?.()?.find((entry: any) => entry.ns === NS);
+    const currentOpts = typeof options === "function" ? options() : {};
+    const descVal = descriptor?.value;
+
+    const models = Array.isArray(descVal?.models) && descVal.models.length > 0
+      ? descVal.models
+      : Array.isArray(currentOpts.models) && currentOpts.models.length > 0
+        ? currentOpts.models
+        : GROK_CATALOG;
+
+    const value = {
+      streamIdleTimeoutMs:
+        descVal?.streamIdleTimeoutMs ??
+        currentOpts.streamIdleTimeoutMs ??
+        GROK_DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      models: models.map((m: any) => ({ ...m })),
+      enableImageGen:
+        typeof descVal?.enableImageGen === "boolean"
+          ? descVal.enableImageGen
+          : typeof currentOpts.enableImageGen === "boolean"
+            ? currentOpts.enableImageGen
+            : true,
+      serverSearch:
+        typeof descVal?.serverSearch === "boolean"
+          ? descVal.serverSearch
+          : typeof currentOpts.serverSearch === "boolean"
+            ? currentOpts.serverSearch
+            : false,
+      proxy:
+        typeof descVal?.proxy === "string"
+          ? descVal.proxy
+          : typeof currentOpts.proxy === "string"
+            ? currentOpts.proxy
+            : ""
+    };
+
+    return {
+      ok: true as const,
+      value: {
+        value,
+        user: descriptor?.user,
+        revision: descriptor?.revision ?? 1,
+        status: "ready" as const,
+        writable: true
+      }
+    };
+  } catch (error: any) {
+    return internalError(error instanceof Error ? error.message : "Failed to read Grok settings");
+  }
+}
+
+export async function saveDisplayedCatalog(
+  ctx: any,
+  payload: unknown,
+  options?: () => any
+): Promise<{ ok: true; value: GrokSaveResult } | { ok: false; error: any }> {
   const request = decodeGrokSaveRequest(payload);
   if (request === undefined) return internalError("invalid Grok settings request");
   const settings = ctx.get("settings");
@@ -170,8 +228,15 @@ export async function saveDisplayedCatalog(ctx: any, payload: unknown): Promise<
   try {
     const before = settings.describe().find((descriptor: any) => descriptor.ns === NS);
     if (before === undefined) return internalError("Grok settings are unavailable");
-    const current = decodeGrokSettings(before.value);
-    if (current === undefined) return internalError("Grok settings are invalid");
+    const currentOpts = typeof options === "function" ? options() : {};
+    const currentVal = before.value ?? {};
+    const current = decodeGrokSettings(currentVal) ?? {
+      streamIdleTimeoutMs: currentOpts.streamIdleTimeoutMs ?? GROK_DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      models: currentOpts.models ?? [...GROK_CATALOG],
+      enableImageGen: currentOpts.enableImageGen ?? true,
+      serverSearch: currentOpts.serverSearch ?? false,
+      proxy: currentOpts.proxy ?? ""
+    };
     const ops: any[] = [];
     if (!deepEqualJson(current.models, request.models)) {
       ops.push({
@@ -201,17 +266,23 @@ export async function saveDisplayedCatalog(ctx: any, payload: unknown): Promise<
         value: request.proxy
       });
     }
-    if (ops.length > 0) await settings.mutate(NS, ops, request.expectedRevision);
-    const accepted = settings.describe().find((descriptor: any) => descriptor.ns === NS);
-    const acceptedSettings = decodeGrokSettings(accepted?.value);
-    if (accepted === undefined || acceptedSettings === undefined) {
-      return internalError("Grok settings could not be reloaded");
+    if (ops.length > 0) {
+      const revision = typeof request.expectedRevision === "number" ? request.expectedRevision : before.revision;
+      await settings.mutate(NS, ops, revision);
     }
+    const accepted = settings.describe().find((descriptor: any) => descriptor.ns === NS);
+    const acceptedSettings = decodeGrokSettings(accepted?.value) ?? {
+      streamIdleTimeoutMs: current.streamIdleTimeoutMs,
+      models: request.models,
+      enableImageGen: request.enableImageGen ?? current.enableImageGen,
+      serverSearch: request.serverSearch ?? current.serverSearch,
+      proxy: request.proxy ?? current.proxy
+    };
     return {
       ok: true,
       value: {
         settings: acceptedSettings,
-        revision: accepted.revision
+        revision: accepted?.revision ?? (before.revision + 1)
       }
     };
   } catch (error: any) {

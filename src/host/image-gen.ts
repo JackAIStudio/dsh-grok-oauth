@@ -6,11 +6,14 @@ import { defineTool } from "@deepseek-ai/dsh-tools";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { isRecord } from "../common/contract.js";
 import {
+  DEFAULT_GROK_IMAGINE_QUALITY,
   GROK_IMAGE_GEN_TIMEOUT_MS,
   GROK_IMAGE_GEN_TOOL_NAME,
   GROK_IMAGINE_ASPECT_RATIOS,
   GROK_IMAGINE_BASE_URL,
-  GROK_IMAGINE_MODEL
+  GROK_IMAGINE_MODEL,
+  GROK_IMAGINE_QUALITIES,
+  type GrokImagineQuality
 } from "../common/constants.js";
 import { GROK_CLI_REQUEST_HEADERS } from "./oauth.js";
 
@@ -53,6 +56,16 @@ export function extensionOf(mediaType: string): string {
   return "png";
 }
 
+export function qualityOf(value?: string): GrokImagineQuality | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (trimmed.length === 0) return undefined;
+  if (!(GROK_IMAGINE_QUALITIES as readonly string[]).includes(trimmed as any)) {
+    throw new Error(`grok_image_gen quality must be one of ${GROK_IMAGINE_QUALITIES.join(", ")}`);
+  }
+  return trimmed as GrokImagineQuality;
+}
+
 function redact(message: string, secret: string): string {
   return secret.length === 0 ? message : message.split(secret).join("[redacted]");
 }
@@ -75,12 +88,20 @@ function describeNetworkFailure(
   error: unknown,
   user: AbortSignal | undefined,
   timeout: { aborted: boolean },
-  timeoutMs: number
+  timeoutMs: number,
+  gotHeaders: boolean,
+  elapsedMs: number
 ): string {
+  const elapsedSec = Math.round(elapsedMs / 1000);
   if (user?.aborted) return "Grok Imagine request was cancelled";
   if (timeout.aborted) return `Grok Imagine timed out after ${String(timeoutMs / 1000)}s`;
-  if (isTransportDrop(error)) return "Grok Imagine connection dropped while reading the image (undici: terminated)";
-  return `Grok Imagine request failed: ${errorMessage(error)}`;
+  if (isTransportDrop(error)) {
+    if (!gotHeaders) {
+      return `Grok Imagine upstream connection dropped before headers arrived (after ${elapsedSec}s, likely proxy idle timeout; consider quality='low' for faster generation or switch proxy node)`;
+    }
+    return `Grok Imagine connection dropped while reading response body (after ${elapsedSec}s)`;
+  }
+  return `Grok Imagine request failed (after ${elapsedSec}s): ${errorMessage(error)}`;
 }
 
 function combineSignals(
@@ -150,25 +171,38 @@ async function downloadUrl(
   url: string,
   accessToken: string,
   fetchImpl: typeof fetch,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  maxAttempts = 3
 ): Promise<Uint8Array> {
-  let response: Response;
-  try {
-    response = await fetchImpl(url, {
-      method: "GET",
-      headers: { authorization: `Bearer ${accessToken}` },
-      signal
-    });
-  } catch (error) {
-    fail(
-      `Grok Imagine image download failed: ${
-        error instanceof Error && error.message.length > 0 ? error.message : "network error"
-      }`,
-      accessToken
-    );
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    if (signal?.aborted) {
+      fail("Grok Imagine image download was cancelled", accessToken);
+    }
+    try {
+      const response = await fetchImpl(url, {
+        method: "GET",
+        headers: { authorization: `Bearer ${accessToken}` },
+        signal
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${String(response.status)}`);
+      }
+      return new Uint8Array(await response.arrayBuffer());
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxAttempts && !signal?.aborted) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        continue;
+      }
+    }
   }
-  if (!response.ok) fail(`Grok Imagine image download failed with HTTP ${String(response.status)}`, accessToken);
-  return new Uint8Array(await response.arrayBuffer());
+  fail(
+    `Grok Imagine image download failed after ${maxAttempts} attempts: ${
+      lastError instanceof Error && lastError.message.length > 0 ? lastError.message : "network error"
+    }`,
+    accessToken
+  );
 }
 
 function firstImage(payload: unknown, secret: string) {
@@ -193,6 +227,7 @@ export async function generateGrokImage(request: {
   accessToken: string;
   prompt: string;
   aspectRatio?: string;
+  quality?: GrokImagineQuality;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
   imagesURL?: string;
@@ -204,6 +239,7 @@ export async function generateGrokImage(request: {
   if (request.aspectRatio !== undefined && !(GROK_IMAGINE_ASPECT_RATIOS as readonly string[]).includes(request.aspectRatio)) {
     throw new Error(`grok_image_gen aspect_ratio must be one of ${GROK_IMAGINE_ASPECT_RATIOS.join(", ")}`);
   }
+  const quality = request.quality ?? DEFAULT_GROK_IMAGINE_QUALITY;
   const timeoutMs = request.timeoutMs ?? GROK_IMAGE_GEN_TIMEOUT_MS;
   const fetchImpl = request.fetchImpl ?? fetch;
   const isEdit = request.referenceImages !== undefined && request.referenceImages.length > 0;
@@ -223,7 +259,7 @@ export async function generateGrokImage(request: {
         model: GROK_IMAGINE_MODEL,
         prompt,
         n: 1,
-        quality: "medium",
+        quality,
         response_format: "b64_json",
         ...(request.aspectRatio === undefined ? {} : { aspect_ratio: request.aspectRatio }),
         ...(wants2k ? { resolution: "2k" } : {})
@@ -234,6 +270,8 @@ export async function generateGrokImage(request: {
   let response: Response | undefined;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const { signal, timeout, dispose } = combineSignals(request.signal, timeoutMs);
+    const attemptStart = Date.now();
+    let gotHeaders = false;
     try {
       response = await fetchImpl(endpoint, {
         method: "POST",
@@ -241,15 +279,24 @@ export async function generateGrokImage(request: {
         body: JSON.stringify(body),
         signal
       });
+      gotHeaders = true;
       raw = await response.text();
       dispose();
       break;
     } catch (error) {
       dispose();
-      if (
-        !(attempt < attempts && !request.signal?.aborted && !timeout.aborted && isTransportDrop(error))
-      ) {
-        fail(describeNetworkFailure(error, request.signal, timeout, timeoutMs), request.accessToken);
+      const elapsedMs = Date.now() - attemptStart;
+      const canRetry =
+        attempt < attempts &&
+        !request.signal?.aborted &&
+        !timeout.aborted &&
+        isTransportDrop(error) &&
+        elapsedMs <= 3000;
+      if (!canRetry) {
+        fail(
+          describeNetworkFailure(error, request.signal, timeout, timeoutMs, gotHeaders, elapsedMs),
+          request.accessToken
+        );
       }
     }
   }
@@ -258,8 +305,12 @@ export async function generateGrokImage(request: {
     let detail = raw.slice(0, 500);
     try {
       const parsed = JSON.parse(raw);
-      if (isRecord(parsed) && isRecord(parsed["error"]) && typeof parsed["error"]["message"] === "string") {
-        detail = parsed["error"]["message"];
+      if (isRecord(parsed)) {
+        if (isRecord(parsed["error"]) && typeof parsed["error"]["message"] === "string") {
+          detail = parsed["error"]["message"];
+        } else if (typeof parsed["error"] === "string") {
+          detail = parsed["error"];
+        }
       }
     } catch {}
     fail(`Grok Imagine failed with HTTP ${String(response.status)}: ${detail}`, request.accessToken);
@@ -391,6 +442,12 @@ export function grokImageGenTool(
         enum: [...GROK_IMAGINE_ASPECT_RATIOS],
         description: "Optional aspect ratio. Examples: 1:1, 16:9, 9:16, auto."
       },
+      quality: {
+        type: "string",
+        enum: [...GROK_IMAGINE_QUALITIES],
+        description:
+          "Optional generation quality: 'medium' (default, higher detail), 'low' (faster generation, helps avoid proxy idle timeouts), or 'auto'."
+      },
       reference_images: {
         type: "array",
         items: { type: "string" },
@@ -462,6 +519,7 @@ export function grokImageGenTool(
       const attachments = ctx.attachments;
       const accessToken = await options.resolveAccessToken();
       const aspectRatio = aspectRatioOf(args.aspect_ratio);
+      const quality = qualityOf(args.quality);
       let referenceImages: Array<{ url: string }> | undefined;
       if (Array.isArray(args.reference_images) && args.reference_images.length > 0) {
         const cwd = exec.agent?.session.header.cwd;
@@ -485,15 +543,10 @@ export function grokImageGenTool(
         prompt,
         signal: exec.signal,
         ...(aspectRatio === undefined ? {} : { aspectRatio }),
+        ...(quality === undefined ? {} : { quality }),
         ...(referenceImages === undefined ? {} : { referenceImages }),
         ...(options.imagesURL === undefined ? {} : { imagesURL: options.imagesURL }),
         ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl })
-      }).catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        if (/^terminated$/i.test(message)) {
-          throw new Error("Grok Imagine connection dropped while reading the image (undici: terminated)");
-        }
-        throw error;
       });
       if (!attachments.imageLimits.mediaTypes.includes(generated.mediaType)) {
         throw new Error(`${generated.mediaType} images are disabled by this deployment`);

@@ -114,4 +114,15 @@ assert.equal(parsed.truncated, false);
 assert.equal(hostModule.GROK_NATIVE_SEARCH_SERVICE, "grokNativeSearch");
 console.log("  Native search parser: PASS");
 
+console.log("[test] 6. Checking Grok Imagine Quality resolution...");
+assert.deepEqual(hostModule.GROK_IMAGINE_QUALITIES, ["low", "medium", "auto"]);
+assert.equal(hostModule.DEFAULT_GROK_IMAGINE_QUALITY, "medium");
+assert.equal(hostModule.qualityOf("low"), "low");
+assert.equal(hostModule.qualityOf("LOW"), "low");
+assert.equal(hostModule.qualityOf("medium"), "medium");
+assert.equal(hostModule.qualityOf("auto"), "auto");
+assert.equal(hostModule.qualityOf(undefined), undefined);
+assert.throws(() => hostModule.qualityOf("ultra"), /quality must be one of/);
+console.log("  Imagine Quality resolution: PASS");
+
 console.log("\n[test] ALL SMOKE TESTS PASSED SUCCESSFULLY!");

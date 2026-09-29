@@ -79,22 +79,34 @@ export const GROK_CATALOG = Object.freeze([
     thinking: true,
     vision: true,
     contextWindow: 500000,
-    defaultReasoningEffort: "high",
+    defaultReasoningEffort: "xhigh",
     reasoningEfforts: GROK_4_6_EFFORTS
   }),
   Object.freeze({
-    id: "grok-4.5",
-    name: "Grok 4.5",
+    id: "grok-4.7",
+    name: "Grok 4.7",
     thinking: true,
     vision: true,
     contextWindow: 500000,
-    defaultReasoningEffort: "high",
-    reasoningEfforts: Object.freeze(GROK_4_6_EFFORTS.filter((effort) => effort.value !== "xhigh"))
+    defaultReasoningEffort: "xhigh",
+    reasoningEfforts: GROK_4_6_EFFORTS
+  }),
+  Object.freeze({
+    id: "grok-4.7-build-fast",
+    name: "Grok 4.7 Fast",
+    thinking: true,
+    vision: true,
+    contextWindow: 500000,
+    defaultReasoningEffort: "xhigh",
+    reasoningEfforts: GROK_4_6_EFFORTS
   })
 ]);
 
 /** Account model list inside {@link GROK_RPC_CHANNEL}. */
 export const GROK_MODELS_ENDPOINT = "models/list";
+
+/** Atomic settings-read endpoint. */
+export const GROK_SETTINGS_READ_ENDPOINT = "settings/read";
 
 /** Atomic settings-save endpoint. */
 export const GROK_SAVE_ENDPOINT = "settings/save";
@@ -135,6 +147,9 @@ export const MAX_USAGE_BYTES = 1048576;
 
 export const GROK_IMAGINE_BASE_URL = "https://api.x.ai/v1";
 export const GROK_IMAGINE_MODEL = "grok-imagine-image-2.0";
+export const GROK_IMAGINE_QUALITIES = ["low", "medium", "auto"] as const;
+export type GrokImagineQuality = (typeof GROK_IMAGINE_QUALITIES)[number];
+export const DEFAULT_GROK_IMAGINE_QUALITY: GrokImagineQuality = "medium";
 export const GROK_IMAGINE_ASPECT_RATIOS = [
   "1:1",
   "16:9",

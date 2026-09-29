@@ -1,5 +1,6 @@
 import React from "react";
 import { GROK_SETTINGS_NAMESPACE } from "../../common/constants.js";
+import { GrokPluginCard, type GrokPluginCardProps } from "./GrokPluginCard.js";
 
 export const GROK_AUTH_SECTION_ID = "grok-oauth-login";
 export const GROK_AUTH_ITEM_SLOT = "settings.grok.auth";
@@ -49,17 +50,19 @@ export function duplicateSection(error: unknown): boolean {
 export function GrokAuthSection(props: {
   t?: (key: string) => string;
   renderSlot?: (slotName: string, props: any, options: { entryKey: string }) => React.ReactNode;
+  grokCardProps?: GrokPluginCardProps;
 }) {
   const t = props.t ?? ((key: string) => key);
   const renderSlot = props.renderSlot;
   const node = renderSlot?.(GROK_AUTH_ITEM_SLOT, {}, { entryKey: GROK_SETTINGS_NAMESPACE });
+  const cardProps = props.grokCardProps;
   return (
     <div data-grok-auth-section={GROK_AUTH_LOCALE_NS} style={pageStyle}>
       <header>
         <h2 style={titleStyle}>{t("title")}</h2>
         <p style={subtitleStyle}>{t("subtitle")}</p>
       </header>
-      {node == null ? null : node}
+      {node != null ? node : cardProps ? <GrokPluginCard {...cardProps} /> : null}
     </div>
   );
 }

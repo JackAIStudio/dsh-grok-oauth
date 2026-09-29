@@ -53,17 +53,26 @@ var GROK_CATALOG = Object.freeze([
     thinking: true,
     vision: true,
     contextWindow: 5e5,
-    defaultReasoningEffort: "high",
+    defaultReasoningEffort: "xhigh",
     reasoningEfforts: GROK_4_6_EFFORTS
   }),
   Object.freeze({
-    id: "grok-4.5",
-    name: "Grok 4.5",
+    id: "grok-4.7",
+    name: "Grok 4.7",
     thinking: true,
     vision: true,
     contextWindow: 5e5,
-    defaultReasoningEffort: "high",
-    reasoningEfforts: Object.freeze(GROK_4_6_EFFORTS.filter((effort) => effort.value !== "xhigh"))
+    defaultReasoningEffort: "xhigh",
+    reasoningEfforts: GROK_4_6_EFFORTS
+  }),
+  Object.freeze({
+    id: "grok-4.7-build-fast",
+    name: "Grok 4.7 Fast",
+    thinking: true,
+    vision: true,
+    contextWindow: 5e5,
+    defaultReasoningEffort: "xhigh",
+    reasoningEfforts: GROK_4_6_EFFORTS
   })
 ]);
 var GROK_MODELS_ENDPOINT = "models/list";
@@ -95,6 +104,8 @@ var DEFAULT_USAGE_REQUEST_TIMEOUT_MS = 15e3;
 var MAX_USAGE_BYTES = 1048576;
 var GROK_IMAGINE_BASE_URL = "https://api.x.ai/v1";
 var GROK_IMAGINE_MODEL = "grok-imagine-image-2.0";
+var GROK_IMAGINE_QUALITIES = ["low", "medium", "auto"];
+var DEFAULT_GROK_IMAGINE_QUALITY = "medium";
 var GROK_IMAGINE_ASPECT_RATIOS = [
   "1:1",
   "16:9",
@@ -183,8 +194,8 @@ function decodeGrokCatalogModel(value) {
 }
 function decodeGrokSettings(value) {
   if (!isRecord(value)) return void 0;
-  const streamIdleTimeoutMs = value["streamIdleTimeoutMs"];
-  if (typeof streamIdleTimeoutMs !== "number" || !Number.isFinite(streamIdleTimeoutMs) || streamIdleTimeoutMs <= 0) return void 0;
+  const rawTimeout = value["streamIdleTimeoutMs"];
+  const streamIdleTimeoutMs = typeof rawTimeout === "number" && Number.isFinite(rawTimeout) && rawTimeout > 0 ? rawTimeout : GROK_DEFAULT_STREAM_IDLE_TIMEOUT_MS;
   const modelsValue = value["models"];
   const enableImageGen = value["enableImageGen"] === true;
   const serverSearch = value["serverSearch"];
@@ -2056,6 +2067,15 @@ function extensionOf(mediaType) {
   if (mediaType === "image/gif") return "gif";
   return "png";
 }
+function qualityOf(value) {
+  if (value === void 0) return void 0;
+  const trimmed = value.trim().toLowerCase();
+  if (trimmed.length === 0) return void 0;
+  if (!GROK_IMAGINE_QUALITIES.includes(trimmed)) {
+    throw new Error(`grok_image_gen quality must be one of ${GROK_IMAGINE_QUALITIES.join(", ")}`);
+  }
+  return trimmed;
+}
 function redact(message, secret) {
   return secret.length === 0 ? message : message.split(secret).join("[redacted]");
 }
@@ -2070,11 +2090,17 @@ function isTransportDrop(error) {
     errorMessage(error)
   );
 }
-function describeNetworkFailure(error, user, timeout, timeoutMs) {
+function describeNetworkFailure(error, user, timeout, timeoutMs, gotHeaders, elapsedMs) {
+  const elapsedSec = Math.round(elapsedMs / 1e3);
   if (user?.aborted) return "Grok Imagine request was cancelled";
   if (timeout.aborted) return `Grok Imagine timed out after ${String(timeoutMs / 1e3)}s`;
-  if (isTransportDrop(error)) return "Grok Imagine connection dropped while reading the image (undici: terminated)";
-  return `Grok Imagine request failed: ${errorMessage(error)}`;
+  if (isTransportDrop(error)) {
+    if (!gotHeaders) {
+      return `Grok Imagine upstream connection dropped before headers arrived (after ${elapsedSec}s, likely proxy idle timeout; consider quality='low' for faster generation or switch proxy node)`;
+    }
+    return `Grok Imagine connection dropped while reading response body (after ${elapsedSec}s)`;
+  }
+  return `Grok Imagine request failed (after ${elapsedSec}s): ${errorMessage(error)}`;
 }
 function combineSignals(user, timeoutMs) {
   const timeout = AbortSignal.timeout(timeoutMs);
@@ -2130,22 +2156,34 @@ function decodeB64(value, secret) {
     );
   }
 }
-async function downloadUrl(url, accessToken, fetchImpl, signal) {
-  let response;
-  try {
-    response = await fetchImpl(url, {
-      method: "GET",
-      headers: { authorization: `Bearer ${accessToken}` },
-      signal
-    });
-  } catch (error) {
-    fail(
-      `Grok Imagine image download failed: ${error instanceof Error && error.message.length > 0 ? error.message : "network error"}`,
-      accessToken
-    );
+async function downloadUrl(url, accessToken, fetchImpl, signal, maxAttempts = 3) {
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    if (signal?.aborted) {
+      fail("Grok Imagine image download was cancelled", accessToken);
+    }
+    try {
+      const response = await fetchImpl(url, {
+        method: "GET",
+        headers: { authorization: `Bearer ${accessToken}` },
+        signal
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${String(response.status)}`);
+      }
+      return new Uint8Array(await response.arrayBuffer());
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxAttempts && !signal?.aborted) {
+        await new Promise((resolve) => setTimeout(resolve, 1e3));
+        continue;
+      }
+    }
   }
-  if (!response.ok) fail(`Grok Imagine image download failed with HTTP ${String(response.status)}`, accessToken);
-  return new Uint8Array(await response.arrayBuffer());
+  fail(
+    `Grok Imagine image download failed after ${maxAttempts} attempts: ${lastError instanceof Error && lastError.message.length > 0 ? lastError.message : "network error"}`,
+    accessToken
+  );
 }
 function firstImage(payload, secret) {
   if (!isRecord(payload)) fail("Grok Imagine returned an unparseable body", secret);
@@ -2169,6 +2207,7 @@ async function generateGrokImage(request) {
   if (request.aspectRatio !== void 0 && !GROK_IMAGINE_ASPECT_RATIOS.includes(request.aspectRatio)) {
     throw new Error(`grok_image_gen aspect_ratio must be one of ${GROK_IMAGINE_ASPECT_RATIOS.join(", ")}`);
   }
+  const quality = request.quality ?? DEFAULT_GROK_IMAGINE_QUALITY;
   const timeoutMs = request.timeoutMs ?? GROK_IMAGE_GEN_TIMEOUT_MS;
   const fetchImpl = request.fetchImpl ?? fetch;
   const isEdit = request.referenceImages !== void 0 && request.referenceImages.length > 0;
@@ -2185,7 +2224,7 @@ async function generateGrokImage(request) {
     model: GROK_IMAGINE_MODEL,
     prompt,
     n: 1,
-    quality: "medium",
+    quality,
     response_format: "b64_json",
     ...request.aspectRatio === void 0 ? {} : { aspect_ratio: request.aspectRatio },
     ...wants2k ? { resolution: "2k" } : {}
@@ -2196,6 +2235,8 @@ async function generateGrokImage(request) {
   let response;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const { signal, timeout, dispose } = combineSignals(request.signal, timeoutMs);
+    const attemptStart = Date.now();
+    let gotHeaders = false;
     try {
       response = await fetchImpl(endpoint, {
         method: "POST",
@@ -2203,13 +2244,19 @@ async function generateGrokImage(request) {
         body: JSON.stringify(body),
         signal
       });
+      gotHeaders = true;
       raw = await response.text();
       dispose();
       break;
     } catch (error) {
       dispose();
-      if (!(attempt < attempts && !request.signal?.aborted && !timeout.aborted && isTransportDrop(error))) {
-        fail(describeNetworkFailure(error, request.signal, timeout, timeoutMs), request.accessToken);
+      const elapsedMs = Date.now() - attemptStart;
+      const canRetry = attempt < attempts && !request.signal?.aborted && !timeout.aborted && isTransportDrop(error) && elapsedMs <= 3e3;
+      if (!canRetry) {
+        fail(
+          describeNetworkFailure(error, request.signal, timeout, timeoutMs, gotHeaders, elapsedMs),
+          request.accessToken
+        );
       }
     }
   }
@@ -2218,8 +2265,12 @@ async function generateGrokImage(request) {
     let detail = raw.slice(0, 500);
     try {
       const parsed2 = JSON.parse(raw);
-      if (isRecord(parsed2) && isRecord(parsed2["error"]) && typeof parsed2["error"]["message"] === "string") {
-        detail = parsed2["error"]["message"];
+      if (isRecord(parsed2)) {
+        if (isRecord(parsed2["error"]) && typeof parsed2["error"]["message"] === "string") {
+          detail = parsed2["error"]["message"];
+        } else if (typeof parsed2["error"] === "string") {
+          detail = parsed2["error"];
+        }
       }
     } catch {
     }
@@ -2328,6 +2379,11 @@ function grokImageGenTool(ctx, options) {
         enum: [...GROK_IMAGINE_ASPECT_RATIOS],
         description: "Optional aspect ratio. Examples: 1:1, 16:9, 9:16, auto."
       },
+      quality: {
+        type: "string",
+        enum: [...GROK_IMAGINE_QUALITIES],
+        description: "Optional generation quality: 'medium' (default, higher detail), 'low' (faster generation, helps avoid proxy idle timeouts), or 'auto'."
+      },
       reference_images: {
         type: "array",
         items: { type: "string" },
@@ -2398,6 +2454,7 @@ function grokImageGenTool(ctx, options) {
       const attachments = ctx.attachments;
       const accessToken = await options.resolveAccessToken();
       const aspectRatio = aspectRatioOf(args.aspect_ratio);
+      const quality = qualityOf(args.quality);
       let referenceImages;
       if (Array.isArray(args.reference_images) && args.reference_images.length > 0) {
         const cwd = exec.agent?.session.header.cwd;
@@ -2421,15 +2478,10 @@ function grokImageGenTool(ctx, options) {
         prompt,
         signal: exec.signal,
         ...aspectRatio === void 0 ? {} : { aspectRatio },
+        ...quality === void 0 ? {} : { quality },
         ...referenceImages === void 0 ? {} : { referenceImages },
         ...options.imagesURL === void 0 ? {} : { imagesURL: options.imagesURL },
         ...options.fetchImpl === void 0 ? {} : { fetchImpl: options.fetchImpl }
-      }).catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        if (/^terminated$/i.test(message)) {
-          throw new Error("Grok Imagine connection dropped while reading the image (undici: terminated)");
-        }
-        throw error;
       });
       if (!attachments.imageLimits.mediaTypes.includes(generated.mediaType)) {
         throw new Error(`${generated.mediaType} images are disabled by this deployment`);
@@ -3049,7 +3101,35 @@ function createGrokRpcHandler(runtime, options) {
     return internalError(`unknown Grok endpoint: ${endpoint}`);
   };
 }
-async function saveDisplayedCatalog(ctx, payload) {
+function readDisplayedSettings(ctx, options) {
+  try {
+    const settings = ctx.get("settings");
+    const descriptor = settings?.describe?.()?.find((entry) => entry.ns === NS);
+    const currentOpts = typeof options === "function" ? options() : {};
+    const descVal = descriptor?.value;
+    const models = Array.isArray(descVal?.models) && descVal.models.length > 0 ? descVal.models : Array.isArray(currentOpts.models) && currentOpts.models.length > 0 ? currentOpts.models : GROK_CATALOG;
+    const value = {
+      streamIdleTimeoutMs: descVal?.streamIdleTimeoutMs ?? currentOpts.streamIdleTimeoutMs ?? GROK_DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      models: models.map((m) => ({ ...m })),
+      enableImageGen: typeof descVal?.enableImageGen === "boolean" ? descVal.enableImageGen : typeof currentOpts.enableImageGen === "boolean" ? currentOpts.enableImageGen : true,
+      serverSearch: typeof descVal?.serverSearch === "boolean" ? descVal.serverSearch : typeof currentOpts.serverSearch === "boolean" ? currentOpts.serverSearch : false,
+      proxy: typeof descVal?.proxy === "string" ? descVal.proxy : typeof currentOpts.proxy === "string" ? currentOpts.proxy : ""
+    };
+    return {
+      ok: true,
+      value: {
+        value,
+        user: descriptor?.user,
+        revision: descriptor?.revision ?? 1,
+        status: "ready",
+        writable: true
+      }
+    };
+  } catch (error) {
+    return internalError(error instanceof Error ? error.message : "Failed to read Grok settings");
+  }
+}
+async function saveDisplayedCatalog(ctx, payload, options) {
   const request = decodeGrokSaveRequest(payload);
   if (request === void 0) return internalError("invalid Grok settings request");
   const settings = ctx.get("settings");
@@ -3057,8 +3137,15 @@ async function saveDisplayedCatalog(ctx, payload) {
   try {
     const before = settings.describe().find((descriptor) => descriptor.ns === NS);
     if (before === void 0) return internalError("Grok settings are unavailable");
-    const current = decodeGrokSettings(before.value);
-    if (current === void 0) return internalError("Grok settings are invalid");
+    const currentOpts = typeof options === "function" ? options() : {};
+    const currentVal = before.value ?? {};
+    const current = decodeGrokSettings(currentVal) ?? {
+      streamIdleTimeoutMs: currentOpts.streamIdleTimeoutMs ?? GROK_DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      models: currentOpts.models ?? [...GROK_CATALOG],
+      enableImageGen: currentOpts.enableImageGen ?? true,
+      serverSearch: currentOpts.serverSearch ?? false,
+      proxy: currentOpts.proxy ?? ""
+    };
     const ops = [];
     if (!deepEqualJson(current.models, request.models)) {
       ops.push({
@@ -3088,17 +3175,23 @@ async function saveDisplayedCatalog(ctx, payload) {
         value: request.proxy
       });
     }
-    if (ops.length > 0) await settings.mutate(NS, ops, request.expectedRevision);
-    const accepted = settings.describe().find((descriptor) => descriptor.ns === NS);
-    const acceptedSettings = decodeGrokSettings(accepted?.value);
-    if (accepted === void 0 || acceptedSettings === void 0) {
-      return internalError("Grok settings could not be reloaded");
+    if (ops.length > 0) {
+      const revision = typeof request.expectedRevision === "number" ? request.expectedRevision : before.revision;
+      await settings.mutate(NS, ops, revision);
     }
+    const accepted = settings.describe().find((descriptor) => descriptor.ns === NS);
+    const acceptedSettings = decodeGrokSettings(accepted?.value) ?? {
+      streamIdleTimeoutMs: current.streamIdleTimeoutMs,
+      models: request.models,
+      enableImageGen: request.enableImageGen ?? current.enableImageGen,
+      serverSearch: request.serverSearch ?? current.serverSearch,
+      proxy: request.proxy ?? current.proxy
+    };
     return {
       ok: true,
       value: {
         settings: acceptedSettings,
-        revision: accepted.revision
+        revision: accepted?.revision ?? before.revision + 1
       }
     };
   } catch (error) {
@@ -3265,7 +3358,8 @@ function apply(ctx, config) {
   const grokRpc = createGrokRpcHandler(runtime);
   ctx.inject(["connection", "webServer"], (connectionCtx) => {
     const rpcHandler = async (endpoint, payload, signal) => {
-      if (endpoint === "settings/save") return saveDisplayedCatalog(ctx, payload);
+      if (endpoint === "settings/read") return readDisplayedSettings(ctx, options);
+      if (endpoint === "settings/save") return saveDisplayedCatalog(ctx, payload, options);
       return grokRpc(endpoint, payload, signal);
     };
     try {
@@ -3360,7 +3454,10 @@ function apply(ctx, config) {
     const fiber = ctx.inject(
       ["tools", "fs", "attachments"],
       (toolCtx) => toolCtx.tools.register(
-        grokImageGenTool(toolCtx, { resolveAccessToken: () => resolveGrokAccessToken(runtime) })
+        grokImageGenTool(toolCtx, {
+          resolveAccessToken: () => resolveGrokAccessToken(runtime),
+          fetchImpl: (input, init) => grokFetch(input, init)
+        })
       )
     );
     imageGenFiber = fiber;
@@ -3390,6 +3487,7 @@ function apply(ctx, config) {
 }
 export {
   Config,
+  DEFAULT_GROK_IMAGINE_QUALITY,
   DEFAULT_USAGE_REQUEST_TIMEOUT_MS,
   GROK_4_5_REASONING_EFFORTS,
   GROK_4_6_REASONING_EFFORTS,
@@ -3410,6 +3508,7 @@ export {
   GROK_IMAGINE_ASPECT_RATIOS,
   GROK_IMAGINE_BASE_URL,
   GROK_IMAGINE_MODEL,
+  GROK_IMAGINE_QUALITIES,
   GROK_MODELS_ENDPOINT,
   GROK_MODELS_URL,
   GROK_NATIVE_SEARCH_SERVICE,
@@ -3482,7 +3581,9 @@ export {
   parseGrokBilling,
   parseGrokModels,
   parseGrokSearchSources,
+  qualityOf,
   readAllAccountUsage,
+  readDisplayedSettings,
   readGrokModels,
   readGrokUsage,
   readSession,
@@ -3490,6 +3591,7 @@ export {
   resolveGrokAccessToken,
   resolveGrokReasoningWire,
   resolveGrokSessionPath,
+  saveDisplayedCatalog,
   statusFromSession,
   statusFromStore,
   stripGrokServerSearchToolCalls,

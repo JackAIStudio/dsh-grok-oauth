@@ -27,6 +27,7 @@ import {
   GROK_AUTH_START_ENDPOINT,
   GROK_AUTH_STATUS_ENDPOINT,
   GROK_AUTH_SWITCH_ENDPOINT,
+  DEFAULT_GROK_IMAGINE_QUALITY,
   GROK_BILLING_URL,
   GROK_CATALOG,
   GROK_CHAT_BASE_URL,
@@ -37,6 +38,7 @@ import {
   GROK_IMAGINE_ASPECT_RATIOS,
   GROK_IMAGINE_BASE_URL,
   GROK_IMAGINE_MODEL,
+  GROK_IMAGINE_QUALITIES,
   GROK_MODELS_ENDPOINT,
   GROK_MODELS_URL,
   GROK_OAUTH_CLIENT_ID,
@@ -174,7 +176,8 @@ import {
   extensionOf,
   generateGrokImage,
   grokImageGenTool,
-  mediaTypeOf
+  mediaTypeOf,
+  qualityOf
 } from "./image-gen.js";
 import { isLoopbackAddress, sendJson } from "./loopback.js";
 import {
@@ -183,7 +186,7 @@ import {
   installGrokNativeSearch,
   parseGrokSearchSources
 } from "./native-search.js";
-import { createGrokRpcHandler, saveDisplayedCatalog } from "./rpc.js";
+import { createGrokRpcHandler, readDisplayedSettings, saveDisplayedCatalog } from "./rpc.js";
 
 const DEFAULT_MAX_RETRIES = 2;
 export const name = "llm-grok";
@@ -336,7 +339,8 @@ export function apply(ctx: any, config: any): void {
   const grokRpc = createGrokRpcHandler(runtime);
   ctx.inject(["connection", "webServer"], (connectionCtx: any) => {
     const rpcHandler = async (endpoint: string, payload: unknown, signal?: AbortSignal) => {
-      if (endpoint === "settings/save") return saveDisplayedCatalog(ctx, payload);
+      if (endpoint === "settings/read") return readDisplayedSettings(ctx, options);
+      if (endpoint === "settings/save") return saveDisplayedCatalog(ctx, payload, options);
       return grokRpc(endpoint, payload, signal);
     };
 
@@ -439,7 +443,10 @@ export function apply(ctx: any, config: any): void {
     if (stopped || !enabled) return;
     const fiber = ctx.inject(["tools", "fs", "attachments"], (toolCtx: any) =>
       toolCtx.tools.register(
-        grokImageGenTool(toolCtx, { resolveAccessToken: () => resolveGrokAccessToken(runtime) })
+        grokImageGenTool(toolCtx, {
+          resolveAccessToken: () => resolveGrokAccessToken(runtime),
+          fetchImpl: (input: any, init?: any) => grokFetch(input, init)
+        })
       )
     );
     imageGenFiber = fiber;
@@ -562,6 +569,7 @@ export {
   parseGrokSearchSources,
   parseGrokModels,
   readAllAccountUsage,
+  readDisplayedSettings,
   readGrokModels,
   readGrokUsage,
   readSession,
@@ -569,11 +577,15 @@ export {
   resolveGrokAccessToken,
   resolveGrokReasoningWire,
   resolveGrokSessionPath,
+  saveDisplayedCatalog,
   statusFromSession,
   statusFromStore,
   stripGrokServerSearchToolCalls,
   switchActiveAccount,
   switchRuntimeAccount,
+  DEFAULT_GROK_IMAGINE_QUALITY,
+  GROK_IMAGINE_QUALITIES,
+  qualityOf,
   upsertAccount,
   withActiveAccount,
   writeSession,

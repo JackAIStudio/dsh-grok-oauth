@@ -1,4 +1,4 @@
-import { GROK_CATALOG } from "./constants.js";
+import { GROK_CATALOG, GROK_DEFAULT_STREAM_IDLE_TIMEOUT_MS } from "./constants.js";
 
 export interface GrokReasoningEffort {
   id: string;
@@ -168,8 +168,11 @@ export function decodeGrokCatalogModel(value: unknown): GrokCatalogModel | undef
 
 export function decodeGrokSettings(value: unknown): GrokSettings | undefined {
   if (!isRecord(value)) return undefined;
-  const streamIdleTimeoutMs = value["streamIdleTimeoutMs"];
-  if (typeof streamIdleTimeoutMs !== "number" || !Number.isFinite(streamIdleTimeoutMs) || streamIdleTimeoutMs <= 0) return undefined;
+  const rawTimeout = value["streamIdleTimeoutMs"];
+  const streamIdleTimeoutMs =
+    typeof rawTimeout === "number" && Number.isFinite(rawTimeout) && rawTimeout > 0
+      ? rawTimeout
+      : GROK_DEFAULT_STREAM_IDLE_TIMEOUT_MS;
   const modelsValue = value["models"];
   const enableImageGen = value["enableImageGen"] === true;
   const serverSearch = value["serverSearch"];

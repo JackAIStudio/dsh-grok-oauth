@@ -7,6 +7,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 
 const isWatch = process.argv.includes('--watch');
+const isHostOnly = process.argv.includes('--host-only');
 
 async function buildHost() {
   console.log('[build] Building Host (index.js)...');
@@ -91,7 +92,9 @@ ${code}
 async function main() {
   try {
     await buildHost();
-    await buildClient();
+    if (!isHostOnly) {
+      await buildClient();
+    }
     console.log('[build] Complete.');
   } catch (err) {
     console.error('[build] Failed:', err);

@@ -5,9 +5,11 @@ window.__ModuleLoader__.load({
 		var exports = module.exports;
 		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 
+var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __export = (target, all) => {
   for (var name2 in all)
@@ -21,6 +23,14 @@ var __copyProps = (to, from, except, desc) => {
   }
   return to;
 };
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
 // src/client/index.tsx
@@ -31,9 +41,11 @@ __export(index_exports, {
   name: () => name
 });
 module.exports = __toCommonJS(index_exports);
+var import_react5 = __toESM(require("react"), 1);
 
 // src/common/constants.ts
 var GROK_SETTINGS_NAMESPACE = "llm-grok";
+var GROK_DEFAULT_STREAM_IDLE_TIMEOUT_MS = 3e5;
 var GROK_RPC_CHANNEL = "/grok";
 var GROK_AUTH_START_ENDPOINT = "auth/start";
 var GROK_AUTH_STATUS_ENDPOINT = "auth/status";
@@ -76,20 +88,30 @@ var GROK_CATALOG = Object.freeze([
     thinking: true,
     vision: true,
     contextWindow: 5e5,
-    defaultReasoningEffort: "high",
+    defaultReasoningEffort: "xhigh",
     reasoningEfforts: GROK_4_6_EFFORTS
   }),
   Object.freeze({
-    id: "grok-4.5",
-    name: "Grok 4.5",
+    id: "grok-4.7",
+    name: "Grok 4.7",
     thinking: true,
     vision: true,
     contextWindow: 5e5,
-    defaultReasoningEffort: "high",
-    reasoningEfforts: Object.freeze(GROK_4_6_EFFORTS.filter((effort) => effort.value !== "xhigh"))
+    defaultReasoningEffort: "xhigh",
+    reasoningEfforts: GROK_4_6_EFFORTS
+  }),
+  Object.freeze({
+    id: "grok-4.7-build-fast",
+    name: "Grok 4.7 Fast",
+    thinking: true,
+    vision: true,
+    contextWindow: 5e5,
+    defaultReasoningEffort: "xhigh",
+    reasoningEfforts: GROK_4_6_EFFORTS
   })
 ]);
 var GROK_MODELS_ENDPOINT = "models/list";
+var GROK_SETTINGS_READ_ENDPOINT = "settings/read";
 var GROK_SAVE_ENDPOINT = "settings/save";
 var GROK_IMAGE_GEN_TOOL_NAME = "grok_image_gen";
 
@@ -158,8 +180,8 @@ function decodeGrokCatalogModel(value) {
 }
 function decodeGrokSettings(value) {
   if (!isRecord(value)) return void 0;
-  const streamIdleTimeoutMs = value["streamIdleTimeoutMs"];
-  if (typeof streamIdleTimeoutMs !== "number" || !Number.isFinite(streamIdleTimeoutMs) || streamIdleTimeoutMs <= 0) return void 0;
+  const rawTimeout = value["streamIdleTimeoutMs"];
+  const streamIdleTimeoutMs = typeof rawTimeout === "number" && Number.isFinite(rawTimeout) && rawTimeout > 0 ? rawTimeout : GROK_DEFAULT_STREAM_IDLE_TIMEOUT_MS;
   const modelsValue = value["models"];
   const enableImageGen = value["enableImageGen"] === true;
   const serverSearch = value["serverSearch"];
@@ -3324,20 +3346,88 @@ function duplicateSection(error) {
 }
 function GrokAuthSection(props) {
   const t = props.t ?? ((key) => key);
-  const cardProps = props.grokCardProps ?? {};
+  const renderSlot = props.renderSlot;
+  const node = renderSlot?.(GROK_AUTH_ITEM_SLOT, {}, { entryKey: GROK_SETTINGS_NAMESPACE });
+  const cardProps = props.grokCardProps;
   return /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("div", { "data-grok-auth-section": GROK_AUTH_LOCALE_NS, style: pageStyle, children: [
     /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("header", { children: [
       /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("h2", { style: titleStyle2, children: t("title") }),
       /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("p", { style: subtitleStyle, children: t("subtitle") })
     ] }),
-    /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(GrokPluginCard, { ...cardProps })
+    node != null ? node : cardProps ? /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(GrokPluginCard, { ...cardProps }) : null
   ] });
 }
 
 // src/client/index.tsx
 var import_jsx_runtime11 = require("react/jsx-runtime");
 var name = "dsh-llm-grok-client";
-var inject = ["slots", "locale"];
+var inject = ["slots", "locale", "connection", "uiConversation"];
+var defaultGrokSettings = {
+  streamIdleTimeoutMs: 3e5,
+  models: GROK_CATALOG.map((m) => ({ ...m })),
+  enableImageGen: true,
+  serverSearch: false,
+  proxy: ""
+};
+var GrokSettingsStore = class {
+  state = {
+    status: "ready",
+    revision: 1,
+    writable: true,
+    value: defaultGrokSettings
+  };
+  listeners = /* @__PURE__ */ new Set();
+  getSnapshot = () => this.state;
+  subscribe = (listener) => {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  };
+  notify() {
+    for (const listener of this.listeners) {
+      listener();
+    }
+  }
+  update(partial) {
+    this.state = {
+      ...this.state,
+      ...partial,
+      value: partial.value ? { ...this.state.value, ...partial.value } : this.state.value
+    };
+    this.notify();
+  }
+  async syncFromRpc(rpc) {
+    if (!rpc || typeof rpc.call !== "function") return;
+    try {
+      const res = await rpc.call(GROK_RPC_CHANNEL, GROK_SETTINGS_READ_ENDPOINT, {});
+      if (res && res.ok && res.value) {
+        const val = res.value;
+        const decoded = decodeGrokSettings(val.value);
+        this.state = {
+          status: "ready",
+          revision: typeof val.revision === "number" ? val.revision : 1,
+          writable: val.writable !== false,
+          user: val.user,
+          value: decoded ?? defaultGrokSettings
+        };
+        this.notify();
+      }
+    } catch (err) {
+      console.warn("Failed to sync Grok settings from RPC:", err);
+    }
+  }
+};
+function useGrokSettingsHook(store, selector = (v) => v) {
+  const [snapshot, setSnapshot] = import_react5.default.useState(store.getSnapshot);
+  import_react5.default.useEffect(() => {
+    setSnapshot(store.getSnapshot());
+    return store.subscribe(() => {
+      setSnapshot(store.getSnapshot());
+    });
+  }, [store]);
+  return selector(snapshot);
+}
 function apply(ctx) {
   const localeNamespace = "settings.grok";
   ctx.effect(
@@ -3348,13 +3438,23 @@ function apply(ctx) {
     "dsh-llm-grok: Plugin configuration copy"
   );
   const t = ctx.locale.bind(localeNamespace);
-  const scope = {
-    getSnapshot: () => ({ value: {}, revision: 0, status: "ready" }),
-    subscribe: () => () => {},
-    set: () => Promise.resolve()
+  const store = new GrokSettingsStore();
+  const rpc = { call: (...args) => ctx.get("connection")?.rpc?.call(...args) };
+  store.syncFromRpc(rpc);
+  if (typeof window !== "undefined") {
+    window.addEventListener("focus", () => store.syncFromRpc(rpc));
+  }
+  const scope = ctx.settingsScope ? ctx.settingsScope.bind({
+    namespace: GROK_SETTINGS_NAMESPACE,
+    decode: decodeGrokSettings
+  }) : {
+    getSnapshot: () => store.getSnapshot(),
+    subscribe: store.subscribe,
+    set: async (newVal) => {
+      await saveConfiguration(newVal);
+    }
   };
   const picker = new GrokModelPickerController();
-  const rpc = { call: (...args) => ctx.get("connection")?.rpc?.call(...args) };
   const startAuth = async () => {
     const result = await rpc.call(GROK_RPC_CHANNEL, GROK_AUTH_START_ENDPOINT, {});
     if (!result.ok) {
@@ -3493,8 +3593,7 @@ function apply(ctx) {
   if (typeof document !== "undefined") document.addEventListener("visibilitychange", onGrokUsageVisibility);
   if (typeof window !== "undefined") window.addEventListener("focus", onGrokUsageFocus);
   const saveConfiguration = async (settings) => {
-    const snapshot = scope.getSnapshot();
-    if (snapshot.revision === void 0) throw new Error(t("requestFailed"));
+    const snapshot = store.getSnapshot();
     const saved = await rpc.call(GROK_RPC_CHANNEL, GROK_SAVE_ENDPOINT, {
       models: settings.models,
       enableImageGen: settings.enableImageGen,
@@ -3502,9 +3601,14 @@ function apply(ctx) {
       ...settings.proxy === void 0 ? {} : { proxy: settings.proxy },
       expectedRevision: snapshot.revision
     });
-    if (!saved.ok) throw new Error(saved.error.message);
+    if (!saved.ok) throw new Error(saved.error?.message ?? t("requestFailed"));
     const accepted = decodeGrokSaveResult(saved.value);
     if (accepted === void 0) throw new Error(t("requestFailed"));
+    store.update({
+      revision: accepted.revision,
+      user: { ...snapshot.user ?? {}, models: accepted.settings.models },
+      value: accepted.settings
+    });
     return accepted;
   };
   ctx.slots.inject(
@@ -3527,12 +3631,7 @@ function apply(ctx) {
   );
   const grokCardInject = () => ({
     t,
-    useGrokSettings: (selector = (v) => v) => selector({
-      value: { models: [], enableImageGen: true, proxy: "127.0.0.1:7897" },
-      revision: 1,
-      status: "ready",
-      writable: true
-    }),
+    useGrokSettings: (selector = (v) => v) => useGrokSettingsHook(store, selector),
     hooks: { grokSettings: scope },
     startAuth,
     completeAuth,
@@ -3629,7 +3728,13 @@ function apply(ctx) {
             label: () => t2("nav"),
             icon: /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(BrandMark, { size: 14 }),
             locale: GROK_AUTH_LOCALE_NS,
-            inject: () => ({ grokCardProps: grokCardInject() })
+            inject: () => ({ grokCardProps: grokCardInject() }),
+            children: {
+              [GROK_AUTH_ITEM_SLOT]: {
+                kind: "keyed",
+                scope: "root"
+              }
+            }
           },
           GrokAuthSection
         );

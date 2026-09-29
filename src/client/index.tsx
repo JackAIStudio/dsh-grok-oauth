@@ -19,10 +19,12 @@ import {
   GROK_AUTH_START_ENDPOINT,
   GROK_AUTH_STATUS_ENDPOINT,
   GROK_AUTH_SWITCH_ENDPOINT,
+  GROK_CATALOG,
   GROK_MODELS_ENDPOINT,
   GROK_RPC_CHANNEL,
   GROK_SAVE_ENDPOINT,
   GROK_SETTINGS_NAMESPACE,
+  GROK_SETTINGS_READ_ENDPOINT,
   GROK_USAGE_ALL_ENDPOINT,
   GROK_USAGE_ENDPOINT
 } from "../common/constants.js";
@@ -52,6 +54,90 @@ export const name = "dsh-llm-grok-client";
 
 export const inject = ["slots", "locale", "connection", "uiConversation"];
 
+interface GrokSettingsState {
+  status: "ready" | "loading" | "error";
+  revision: number;
+  writable: boolean;
+  user?: any;
+  value: GrokSettings;
+}
+
+const defaultGrokSettings: GrokSettings = {
+  streamIdleTimeoutMs: 300000,
+  models: GROK_CATALOG.map((m) => ({ ...m })),
+  enableImageGen: true,
+  serverSearch: false,
+  proxy: ""
+};
+
+class GrokSettingsStore {
+  state: GrokSettingsState = {
+    status: "ready",
+    revision: 1,
+    writable: true,
+    value: defaultGrokSettings
+  };
+  listeners = new Set<() => void>();
+
+  getSnapshot = () => this.state;
+
+  subscribe = (listener: () => void) => {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  };
+
+  private notify() {
+    for (const listener of this.listeners) {
+      listener();
+    }
+  }
+
+  update(partial: Partial<GrokSettingsState>) {
+    this.state = {
+      ...this.state,
+      ...partial,
+      value: partial.value ? { ...this.state.value, ...partial.value } : this.state.value
+    };
+    this.notify();
+  }
+
+  async syncFromRpc(rpc: any) {
+    if (!rpc || typeof rpc.call !== "function") return;
+    try {
+      const res = await rpc.call(GROK_RPC_CHANNEL, GROK_SETTINGS_READ_ENDPOINT, {});
+      if (res && res.ok && res.value) {
+        const val = res.value;
+        const decoded = decodeGrokSettings(val.value);
+        this.state = {
+          status: "ready",
+          revision: typeof val.revision === "number" ? val.revision : 1,
+          writable: val.writable !== false,
+          user: val.user,
+          value: decoded ?? defaultGrokSettings
+        };
+        this.notify();
+      }
+    } catch (err) {
+      console.warn("Failed to sync Grok settings from RPC:", err);
+    }
+  }
+}
+
+function useGrokSettingsHook(store: GrokSettingsStore, selector = (v: any) => v) {
+  const [snapshot, setSnapshot] = React.useState(store.getSnapshot);
+
+  React.useEffect(() => {
+    setSnapshot(store.getSnapshot());
+    return store.subscribe(() => {
+      setSnapshot(store.getSnapshot());
+    });
+  }, [store]);
+
+  return selector(snapshot);
+}
+
 export function apply(ctx: any) {
   const localeNamespace = "settings.grok";
   ctx.effect(
@@ -63,16 +149,25 @@ export function apply(ctx: any) {
     "dsh-llm-grok: Plugin configuration copy"
   );
   const t = ctx.locale.bind(localeNamespace);
+  const store = new GrokSettingsStore();
+  const rpc = { call: (...args: any[]) => ctx.get("connection")?.rpc?.call(...args) };
+
+  store.syncFromRpc(rpc);
+  if (typeof window !== "undefined") {
+    window.addEventListener("focus", () => store.syncFromRpc(rpc));
+  }
+
   const scope = ctx.settingsScope ? ctx.settingsScope.bind({
     namespace: GROK_SETTINGS_NAMESPACE,
     decode: decodeGrokSettings
   }) : {
-    getSnapshot: () => ({ value: {}, revision: 0, status: "ready" }),
-    subscribe: () => () => {},
-    set: () => Promise.resolve()
+    getSnapshot: () => store.getSnapshot(),
+    subscribe: store.subscribe,
+    set: async (newVal: any) => {
+      await saveConfiguration(newVal);
+    }
   };
   const picker = new GrokModelPickerController();
-  const { rpc } = ctx.get("connection");
 
   const startAuth = async () => {
     const result = await rpc.call(GROK_RPC_CHANNEL, GROK_AUTH_START_ENDPOINT, {});
@@ -224,8 +319,7 @@ export function apply(ctx: any) {
   if (typeof window !== "undefined") window.addEventListener("focus", onGrokUsageFocus);
 
   const saveConfiguration = async (settings: GrokSettings) => {
-    const snapshot = scope.getSnapshot();
-    if (snapshot.revision === undefined) throw new Error(t("requestFailed"));
+    const snapshot = store.getSnapshot();
     const saved = await rpc.call(GROK_RPC_CHANNEL, GROK_SAVE_ENDPOINT, {
       models: settings.models,
       enableImageGen: settings.enableImageGen,
@@ -233,9 +327,14 @@ export function apply(ctx: any) {
       ...(settings.proxy === undefined ? {} : { proxy: settings.proxy }),
       expectedRevision: snapshot.revision
     });
-    if (!saved.ok) throw new Error(saved.error.message);
+    if (!saved.ok) throw new Error(saved.error?.message ?? t("requestFailed"));
     const accepted = decodeGrokSaveResult(saved.value);
     if (accepted === undefined) throw new Error(t("requestFailed"));
+    store.update({
+      revision: accepted.revision,
+      user: { ...(snapshot.user ?? {}), models: accepted.settings.models },
+      value: accepted.settings
+    });
     return accepted;
   };
 
@@ -259,6 +358,7 @@ export function apply(ctx: any) {
 
   const grokCardInject = () => ({
     t,
+    useGrokSettings: (selector = (v: any) => v) => useGrokSettingsHook(store, selector),
     hooks: { grokSettings: scope },
     startAuth,
     completeAuth,
@@ -359,6 +459,7 @@ function registerGrokSettingsNavIcon(getLabel?: () => string): () => void {
             label: () => t("nav"),
             icon: <BrandMark size={14} />,
             locale: GROK_AUTH_LOCALE_NS,
+            inject: () => ({ grokCardProps: grokCardInject() }),
             children: {
               [GROK_AUTH_ITEM_SLOT]: {
                 kind: "keyed",
