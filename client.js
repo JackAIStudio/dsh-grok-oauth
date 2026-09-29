@@ -3361,7 +3361,7 @@ function GrokAuthSection(props) {
 // src/client/index.tsx
 var import_jsx_runtime11 = require("react/jsx-runtime");
 var name = "dsh-llm-grok-client";
-var inject = ["slots", "locale", "connection", "uiConversation"];
+var inject = ["slots", "locale"];
 var defaultGrokSettings = {
   streamIdleTimeoutMs: 3e5,
   models: GROK_CATALOG.map((m) => ({ ...m })),
@@ -3441,7 +3441,7 @@ function apply(ctx) {
   const store = new GrokSettingsStore();
   const rpc = { call: (...args) => ctx.get("connection")?.rpc?.call(...args) };
   store.syncFromRpc(rpc);
-  if (typeof window !== "undefined") {
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
     window.addEventListener("focus", () => store.syncFromRpc(rpc));
   }
   const scope = ctx.settingsScope ? ctx.settingsScope.bind({

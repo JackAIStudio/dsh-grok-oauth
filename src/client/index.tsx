@@ -52,7 +52,7 @@ import {
 
 export const name = "dsh-llm-grok-client";
 
-export const inject = ["slots", "locale", "connection", "uiConversation"];
+export const inject = ["slots", "locale"];
 
 interface GrokSettingsState {
   status: "ready" | "loading" | "error";
@@ -153,7 +153,7 @@ export function apply(ctx: any) {
   const rpc = { call: (...args: any[]) => ctx.get("connection")?.rpc?.call(...args) };
 
   store.syncFromRpc(rpc);
-  if (typeof window !== "undefined") {
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
     window.addEventListener("focus", () => store.syncFromRpc(rpc));
   }
 
