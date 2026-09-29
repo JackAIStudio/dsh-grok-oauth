@@ -157,10 +157,7 @@ export function apply(ctx: any) {
     window.addEventListener("focus", () => store.syncFromRpc(rpc));
   }
 
-  const scope = ctx.settingsScope ? ctx.settingsScope.bind({
-    namespace: GROK_SETTINGS_NAMESPACE,
-    decode: decodeGrokSettings
-  }) : {
+  const scope = {
     getSnapshot: () => store.getSnapshot(),
     subscribe: store.subscribe,
     set: async (newVal: any) => {
