@@ -496,6 +496,6 @@ export async function completePkceLogin(
 }
 
 export const GROK_CLI_REQUEST_HEADERS = Object.freeze({
-  "x-grok-client-version": "1.0.4",
+  "x-grok-client-version": "1.0.40",
   "x-grok-client-identifier": "grok-shell"
 });
