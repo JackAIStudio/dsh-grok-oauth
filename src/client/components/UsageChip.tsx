@@ -14,27 +14,7 @@ import { GROK_USAGE_ALERT, GROK_USAGE_WARN } from "./AccountList.js";
 
 const GROK_USAGE_FOCUS_DEBOUNCE_MS = 15000;
 
-export const grokUsageDockCss = [
-  '[data-slot="conversation.composer.dock"]:has(> .grok-usage-dock){display:flex!important;flex-flow:row nowrap;justify-content:center;align-items:center;box-sizing:border-box;width:100%;max-width:var(--dsh-chat-content-width);min-width:0;padding:4px calc(var(--dsh-composer-side-clearance) + 16px) 0;overflow:hidden}',
-  '[data-slot="conversation.composer.dock"]:has(> .grok-usage-dock)>*{box-sizing:border-box;flex:0 1 auto;min-width:0;width:auto!important;max-width:none!important;margin:0!important;padding:0!important}',
-  '[data-phase="hero"] [data-slot="conversation.input.dock"]:has(> .grok-usage-dock){display:flex!important;flex:none!important;flex-flow:row nowrap;justify-content:center;align-items:center;box-sizing:border-box;width:100%;max-width:var(--dsh-chat-content-width);min-width:0;min-height:20px;padding:4px calc(var(--dsh-composer-side-clearance) + 16px);overflow:visible;order:30;align-self:center}',
-  '[data-phase="hero"] [data-slot="conversation.input.dock"]:has(> .grok-usage-dock)>*{box-sizing:border-box;flex:0 1 auto;min-width:0;width:auto!important;max-width:none!important;margin:0!important;padding:0!important}',
-  ".grok-usage-dock{display:inline-flex;align-items:center;flex:none;line-height:20px}",
-  '[data-slot="conversation.composer.dock"]:has(> .grok-usage-dock)>.grok-usage-dock{flex:none;overflow:visible}',
-  '[data-phase="hero"] [data-slot="conversation.input.dock"]:has(> .grok-usage-dock)>.grok-usage-dock{flex:none;overflow:visible}',
-  '.grok-usage-dock:not(:last-child):after{content:"|";color:var(--dsw-alias-separator-primary);margin:0 10px;font-size:12px;line-height:20px}',
-  ".grok-usage{appearance:none;display:inline-flex;align-items:center;gap:6px;height:20px;padding:0 2px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:12px;line-height:20px;letter-spacing:.01em;white-space:nowrap;cursor:pointer;user-select:none}",
-  ".grok-usage:hover,.grok-usage:focus-visible{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);outline:none}",
-  '.grok-usage-amount{color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}',
-  ".grok-usage.is-warn .grok-usage-amount{color:var(--dsw-alias-state-warn-primary)}",
-  ".grok-usage.is-alert .grok-usage-amount{color:var(--dsw-alias-state-error-primary)}",
-  ".grok-usage-mark{display:block;opacity:.78;flex:none}",
-  ".grok-usage:hover .grok-usage-mark,.grok-usage:focus-visible .grok-usage-mark{opacity:.95}",
-  ".grok-usage.is-loading .grok-usage-mark{opacity:.95;animation:grok-usage-spin .8s linear infinite}",
-  "@media (prefers-reduced-motion:reduce){.grok-usage.is-loading .grok-usage-mark{animation:none}}",
-  "@keyframes grok-usage-spin{to{transform:rotate(360deg)}}",
-  '@media (max-width:640px){[data-slot="conversation.composer.dock"]:has(> .grok-usage-dock),[data-phase="hero"] [data-slot="conversation.input.dock"]:has(> .grok-usage-dock){padding-left:12px;padding-right:12px}}'
-].join("");
+export const grokUsageDockCss = "";
 
 const grokUsageCssId = "dsh-grok-oauth/usage-dock.css";
 
@@ -68,6 +48,28 @@ export function setGrokUsageFetch(fn: (() => Promise<GrokUsageReply>) | null) {
 
 export function grokUsageEmit() {
   for (const listener of grokUsageListeners) listener();
+  syncGrokToGlobalBus(grokUsageSnapshot);
+}
+
+export function syncGrokToGlobalBus(snapshot: GrokUsageSnapshot, t?: (key: keyof LocaleDict) => string): void {
+  if (typeof window === "undefined") return;
+  const bus = (window as any).__DSH_MODEL_QUOTAS__;
+  if (!bus || typeof bus.set !== "function") return;
+  const usage = snapshot.usage ?? grokUsageLast;
+  if (!usage) return;
+  const used = officialUsedPercent(usage);
+  if (used === undefined) return;
+  const kind = used >= GROK_USAGE_ALERT ? "alert" : used >= GROK_USAGE_WARN ? "warn" : "ready";
+  const amount = `${used}% 已使用`;
+  const title = typeof t === "function" ? grokUsageTitle(usage, t) : `Grok ${amount}`;
+  bus.set("grok", {
+    label: amount,
+    val: used,
+    kind,
+    loading: snapshot.status === "loading",
+    tooltip: title,
+    fetchedAt: usage.fetchedAt,
+  });
 }
 
 export function useGrokUsageStore(): GrokUsageSnapshot {

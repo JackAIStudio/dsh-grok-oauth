@@ -493,29 +493,9 @@ function registerGrokSettingsNavIcon(getLabel?: () => string): () => void {
 
   registerGrokImageToolview(ctx, localeNamespace);
 
-  ctx.slots.inject("conversation.composer.dock", () =>
-    ctx.slots.register(
-      {
-        name: "conversation.composer.dock",
-        id: "dsh-grok-oauth-usage",
-        order: -8,
-        label: () => t("usageWindowSuperGrok")
-      },
-      (props: any) => <GrokUsageChip {...props} seat="dock" t={t} />
-    )
-  );
-
-  ctx.slots.inject("conversation.input.dock", () =>
-    ctx.slots.register(
-      {
-        name: "conversation.input.dock",
-        id: "dsh-grok-oauth-usage-hero",
-        order: 52,
-        label: () => t("usageWindowSuperGrok")
-      },
-      (props: any) => <GrokUsageChip {...props} seat="hero" t={t} />
-    )
-  );
+  if (typeof window !== "undefined") {
+    (window as any).__DSH_MODEL_QUOTAS__?.registerRefresh?.("grok", () => loadGrokUsage(true));
+  }
 
   const cleanupGrokNavIcon = registerGrokSettingsNavIcon();
 

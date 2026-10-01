@@ -1741,27 +1741,7 @@ function renderAccountsUsage(accounts, t) {
 var import_react2 = require("react");
 var import_jsx_runtime7 = require("react/jsx-runtime");
 var GROK_USAGE_FOCUS_DEBOUNCE_MS = 15e3;
-var grokUsageDockCss = [
-  '[data-slot="conversation.composer.dock"]:has(> .grok-usage-dock){display:flex!important;flex-flow:row nowrap;justify-content:center;align-items:center;box-sizing:border-box;width:100%;max-width:var(--dsh-chat-content-width);min-width:0;padding:4px calc(var(--dsh-composer-side-clearance) + 16px) 0;overflow:hidden}',
-  '[data-slot="conversation.composer.dock"]:has(> .grok-usage-dock)>*{box-sizing:border-box;flex:0 1 auto;min-width:0;width:auto!important;max-width:none!important;margin:0!important;padding:0!important}',
-  '[data-phase="hero"] [data-slot="conversation.input.dock"]:has(> .grok-usage-dock){display:flex!important;flex:none!important;flex-flow:row nowrap;justify-content:center;align-items:center;box-sizing:border-box;width:100%;max-width:var(--dsh-chat-content-width);min-width:0;min-height:20px;padding:4px calc(var(--dsh-composer-side-clearance) + 16px);overflow:visible;order:30;align-self:center}',
-  '[data-phase="hero"] [data-slot="conversation.input.dock"]:has(> .grok-usage-dock)>*{box-sizing:border-box;flex:0 1 auto;min-width:0;width:auto!important;max-width:none!important;margin:0!important;padding:0!important}',
-  ".grok-usage-dock{display:inline-flex;align-items:center;flex:none;line-height:20px}",
-  '[data-slot="conversation.composer.dock"]:has(> .grok-usage-dock)>.grok-usage-dock{flex:none;overflow:visible}',
-  '[data-phase="hero"] [data-slot="conversation.input.dock"]:has(> .grok-usage-dock)>.grok-usage-dock{flex:none;overflow:visible}',
-  '.grok-usage-dock:not(:last-child):after{content:"|";color:var(--dsw-alias-separator-primary);margin:0 10px;font-size:12px;line-height:20px}',
-  ".grok-usage{appearance:none;display:inline-flex;align-items:center;gap:6px;height:20px;padding:0 2px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:12px;line-height:20px;letter-spacing:.01em;white-space:nowrap;cursor:pointer;user-select:none}",
-  ".grok-usage:hover,.grok-usage:focus-visible{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);outline:none}",
-  '.grok-usage-amount{color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}',
-  ".grok-usage.is-warn .grok-usage-amount{color:var(--dsw-alias-state-warn-primary)}",
-  ".grok-usage.is-alert .grok-usage-amount{color:var(--dsw-alias-state-error-primary)}",
-  ".grok-usage-mark{display:block;opacity:.78;flex:none}",
-  ".grok-usage:hover .grok-usage-mark,.grok-usage:focus-visible .grok-usage-mark{opacity:.95}",
-  ".grok-usage.is-loading .grok-usage-mark{opacity:.95;animation:grok-usage-spin .8s linear infinite}",
-  "@media (prefers-reduced-motion:reduce){.grok-usage.is-loading .grok-usage-mark{animation:none}}",
-  "@keyframes grok-usage-spin{to{transform:rotate(360deg)}}",
-  '@media (max-width:640px){[data-slot="conversation.composer.dock"]:has(> .grok-usage-dock),[data-phase="hero"] [data-slot="conversation.input.dock"]:has(> .grok-usage-dock){padding-left:12px;padding-right:12px}}'
-].join("");
+var grokUsageDockCss = "";
 var grokUsageCssId = "dsh-grok-oauth/usage-dock.css";
 if (typeof document !== "undefined") {
   let grokUsageTag = document.querySelector(`style[data-plugin-css="${grokUsageCssId}"]`);
@@ -1784,17 +1764,27 @@ function setGrokUsageFetch(fn) {
 }
 function grokUsageEmit() {
   for (const listener of grokUsageListeners) listener();
+  syncGrokToGlobalBus(grokUsageSnapshot);
 }
-function useGrokUsageStore() {
-  const [, bump] = (0, import_react2.useState)(0);
-  (0, import_react2.useEffect)(() => {
-    const onChange = () => bump((n) => n + 1);
-    grokUsageListeners.add(onChange);
-    return () => {
-      grokUsageListeners.delete(onChange);
-    };
-  }, []);
-  return grokUsageSnapshot;
+function syncGrokToGlobalBus(snapshot, t) {
+  if (typeof window === "undefined") return;
+  const bus = window.__DSH_MODEL_QUOTAS__;
+  if (!bus || typeof bus.set !== "function") return;
+  const usage = snapshot.usage ?? grokUsageLast;
+  if (!usage) return;
+  const used = officialUsedPercent(usage);
+  if (used === void 0) return;
+  const kind = used >= GROK_USAGE_ALERT ? "alert" : used >= GROK_USAGE_WARN ? "warn" : "ready";
+  const amount = `${used}% \u5DF2\u4F7F\u7528`;
+  const title = typeof t === "function" ? grokUsageTitle(usage, t) : `Grok ${amount}`;
+  bus.set("grok", {
+    label: amount,
+    val: used,
+    kind,
+    loading: snapshot.status === "loading",
+    tooltip: title,
+    fetchedAt: usage.fetchedAt
+  });
 }
 function loadGrokUsage(force) {
   if (grokUsageFetch === null) return Promise.resolve(grokUsageSnapshot);
@@ -1869,92 +1859,6 @@ function grokUsageTitle(usage, t) {
   }
   parts.push(t("dockClick"));
   return parts.join("\n");
-}
-function isBlankComposer(useSession) {
-  if (typeof document !== "undefined") {
-    const phase = document.querySelector("[data-phase]")?.getAttribute("data-phase");
-    if (phase === "hero" || phase === "settling") return true;
-    if (phase === "active") return false;
-  }
-  if (typeof useSession !== "function") return true;
-  const snap = useSession((s) => s);
-  if (snap && typeof snap === "object") {
-    if (snap.composerPhase === "blank") return true;
-    if (snap.blank === true && snap.promptAttempted !== true) return true;
-  }
-  return false;
-}
-function GrokUsageChip(props) {
-  const t = props.t ?? ((key) => key === "dockUsed" ? "{percent}% \u5DF2\u7528" : key);
-  const blank = isBlankComposer(props.useSession);
-  const snapshot = useGrokUsageStore();
-  const running = typeof props.useSession === "function" ? props.useSession((s) => s.running) : false;
-  const prevRunning = (0, import_react2.useRef)(running);
-  (0, import_react2.useEffect)(() => {
-    if (snapshot.status === "idle" || snapshot.usage === void 0 && grokUsageLast === void 0) {
-      void loadGrokUsage(true);
-    }
-  }, [snapshot.status]);
-  (0, import_react2.useEffect)(() => {
-    if (prevRunning.current === true && running === false) loadGrokUsage(true);
-    prevRunning.current = running;
-  }, [running]);
-  if (props.seat === "hero" !== blank) return null;
-  const usage = snapshot.usage ?? grokUsageLast;
-  if (usage === void 0) {
-    if (snapshot.status === "loading" || snapshot.status === "idle") {
-      return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { className: "grok-usage-dock", children: /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(
-        "button",
-        {
-          type: "button",
-          className: "grok-usage is-loading",
-          title: "Grok \u989D\u5EA6\u67E5\u8BE2\u4E2D...",
-          "aria-label": "Grok \u989D\u5EA6\u67E5\u8BE2\u4E2D...",
-          onMouseDown: (e) => e.preventDefault(),
-          onClick: (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            void loadGrokUsage(true);
-          },
-          children: [
-            /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "grok-usage-mark", children: /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(BrandMark, { size: 12 }) }),
-            /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "grok-usage-amount", children: "..." })
-          ]
-        }
-      ) });
-    }
-    return null;
-  }
-  const used = officialUsedPercent(usage);
-  if (used === void 0) return null;
-  const loading = snapshot.status === "loading";
-  const kind = used >= GROK_USAGE_ALERT ? "alert" : used >= GROK_USAGE_WARN ? "warn" : "ready";
-  const className = [
-    "grok-usage",
-    loading ? "is-loading" : "",
-    kind === "warn" ? "is-warn" : "",
-    kind === "alert" ? "is-alert" : ""
-  ].filter(Boolean).join(" ");
-  const amount = (typeof t === "function" ? t("dockUsed") : "{percent}% \u5DF2\u7528").replace("{percent}", String(used));
-  return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { className: "grok-usage-dock", children: /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(
-    "button",
-    {
-      type: "button",
-      className,
-      title: typeof t === "function" ? grokUsageTitle(usage, t) : `Grok ${amount}`,
-      "aria-label": `${typeof t === "function" ? t("usageWindowSuperGrok") : "SuperGrok"} ${amount}`,
-      onMouseDown: (e) => e.preventDefault(),
-      onClick: (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        loadGrokUsage(true);
-      },
-      children: [
-        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "grok-usage-mark", children: /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(BrandMark, { size: 12 }) }),
-        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "grok-usage-amount", children: amount })
-      ]
-    }
-  ) });
 }
 
 // src/client/components/GrokPluginCard.tsx
@@ -3760,30 +3664,9 @@ function apply(ctx) {
     )
   );
   registerGrokImageToolview(ctx, localeNamespace);
-  ctx.slots.inject(
-    "conversation.composer.dock",
-    () => ctx.slots.register(
-      {
-        name: "conversation.composer.dock",
-        id: "dsh-grok-oauth-usage",
-        order: -8,
-        label: () => t("usageWindowSuperGrok")
-      },
-      (props) => /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(GrokUsageChip, { ...props, seat: "dock", t })
-    )
-  );
-  ctx.slots.inject(
-    "conversation.input.dock",
-    () => ctx.slots.register(
-      {
-        name: "conversation.input.dock",
-        id: "dsh-grok-oauth-usage-hero",
-        order: 52,
-        label: () => t("usageWindowSuperGrok")
-      },
-      (props) => /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(GrokUsageChip, { ...props, seat: "hero", t })
-    )
-  );
+  if (typeof window !== "undefined") {
+    window.__DSH_MODEL_QUOTAS__?.registerRefresh?.("grok", () => loadGrokUsage(true));
+  }
   const cleanupGrokNavIcon = registerGrokSettingsNavIcon();
   ctx.effect(
     () => () => {
